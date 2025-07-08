@@ -101,6 +101,21 @@ interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
   edited_message?: TelegramMessage;
+  callback_query?: {
+    id: string;
+    from: {
+      id: number;
+      first_name: string;
+      username?: string;
+    };
+    message: {
+      chat: {
+        id: number;
+        type: string;
+      };
+    };
+    data?: string;
+  };
 }
 
 interface BotInfo {
@@ -121,6 +136,10 @@ interface ServiceMessage {
   telegramMessageId?: number;
   attachments?: FileAttachment[];
   messageType?: 'text' | 'photo' | 'document' | 'video' | 'audio' | 'voice' | 'sticker';
+  conversationId?: string;
+  senderId?: string;
+  recipientId?: string;
+  recipientName?: string;
 }
 
 interface FileAttachment {
@@ -164,11 +183,13 @@ interface ServiceCallbacks {
   onError: (error: string) => void;
   onMessageStatusUpdate: (messageId: string, status: string) => void;
 }
+
 interface CommandHandler {
   command: string;
   description: string;
   handler: (telegramMessage: TelegramMessage, args: string[]) => Promise<void>;
 }
+
 interface Region {
   id: string;
   name: string;
@@ -182,11 +203,13 @@ interface Office {
   address: string;
   companyId?: string;
 }
+
 export class TelegramBotService {
   private static instance: TelegramBotService | null = null;
   private botToken: string;
   private isInitialized = false;
-  private pollingTimeout: NodeJS.Timeout | null = null;
+  private isPolling = false;
+  private pollingAbortController: AbortController | null = null;
   private lastUpdateId = 0;
   private callbacks: ServiceCallbacks | null = null;
   private connectionHealth: ConnectionHealth;
@@ -196,10 +219,13 @@ export class TelegramBotService {
   private messageCleanupInterval: NodeJS.Timeout | null = null;
   private chatStorage: SupabaseChatStorage;
   private isBrowserMode = false;
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts = 5;
+  private reconnectTimeout: NodeJS.Timeout | null = null;
 
   private regions: Map<string, Region> = new Map();
-  private userOfficeMap: Map<string, string> = new Map(); // userId -> officeId
-  private userCompanyMap: Map<string, string> = new Map(); // userId -> companyId
+  private userOfficeMap: Map<string, string> = new Map();
+  private userCompanyMap: Map<string, string> = new Map();
 
   private constructor(botToken: string) {
     this.botToken = botToken;
@@ -227,71 +253,93 @@ export class TelegramBotService {
     try {
       console.log('🚀 Initializing Telegram Bot Service...');
 
+      // Load regions first
+      await this.loadRegions();
+
       // Check if running in browser environment
       if (typeof window !== 'undefined') {
         console.log('🌐 Browser environment detected - attempting connection...');
 
-        // Try to get bot info first to test connection with shorter timeout
         try {
-          this.botInfo = await this.getBotInfoWithTimeout(5000); // 5 second timeout
+          // Test connection with timeout
+          this.botInfo = await this.getBotInfoWithTimeout(8000);
           console.log('✅ Bot info retrieved successfully:', this.botInfo?.username);
 
-          // Try to clear any existing webhooks before starting polling
+          // Clear any existing webhooks
           await this.clearWebhook();
 
-          // Start polling for messages
-          this.startPolling();
+          // Initialize polling
+          await this.startPolling();
+
           this.isInitialized = true;
           this.updateConnectionHealth(true);
+          this.reconnectAttempts = 0;
 
-          console.log('✅ Telegram Bot Service initialized successfully');
+          console.log('✅ Telegram Bot Service initialized successfully in live mode');
           return true;
         } catch (error) {
-          console.warn('⚠️ Telegram API not accessible, running in offline mode');
-          // Fall back to browser mode
+          console.warn('⚠️ Telegram API not accessible, switching to offline mode:', error);
+          await this.switchToBrowserMode();
+          return true;
         }
       }
 
-      // Browser mode fallback
-      console.log('🌐 Running in offline mode - using database storage only');
-      this.isBrowserMode = true;
-      this.botInfo = { id: 0, first_name: 'Offline Bot', username: 'offline_bot' };
+      // Server environment fallback
+      console.log('🖥️ Server environment detected');
+      this.botInfo = await this.getBotInfoFromAPI();
+      await this.clearWebhook();
+      await this.startPolling();
+
       this.isInitialized = true;
-      this.updateConnectionHealth(false); // Not connected to live Telegram API
-
-      // Load existing conversations from database
-      await this.loadConversationsFromDatabase();
-
+      this.updateConnectionHealth(true);
+      console.log('✅ Telegram Bot Service initialized successfully in server mode');
       return true;
-
 
     } catch (error) {
       console.error('❌ Failed to initialize Telegram Bot Service:', error);
-      this.handleError('Failed to initialize bot service');
-      return false;
+      await this.switchToBrowserMode();
+      return true; // Still return true as we have fallback mode
     }
+  }
+
+  private async switchToBrowserMode(): Promise<void> {
+    console.log('🔄 Switching to browser mode...');
+
+    // Stop any active polling
+    this.stopPolling();
+
+    // Set browser mode
+    this.isBrowserMode = true;
+    this.botInfo = { id: 0, first_name: 'Offline Bot', username: 'offline_bot' };
+    this.isInitialized = true;
+    this.updateConnectionHealth(false);
+
+    // Load existing conversations from database
+    await this.loadConversationsFromDatabase();
+
+    console.log('✅ Successfully switched to browser mode');
   }
 
   private async loadConversationsFromDatabase(): Promise<void> {
     try {
       const conversations = await this.chatStorage.getAllConversations(false);
-      
+
       for (const conversation of conversations) {
         if (conversation.telegramChatIdentifier && conversation.telegramChatIdentifier !== 'system') {
           const chatId = conversation.telegramChatIdentifier;
-          
+
           // Load recent messages for this conversation
           const messages = await this.chatStorage.getConversationHistory(
-            conversation.id,
-            50, // Load last 50 messages
-            0,
-            false
+              conversation.id,
+              50,
+              0,
+              false
           );
-          
+
           // Convert and store messages
           const serviceMessages = messages.map(msg => this.convertChatMessageToServiceMessage(msg, chatId));
           this.messages.set(chatId, serviceMessages);
-          
+
           // Create chat entry
           const lastMessage = serviceMessages[serviceMessages.length - 1];
           if (lastMessage) {
@@ -304,32 +352,244 @@ export class TelegramBotService {
     }
   }
 
+  private async loadRegions(): Promise<void> {
+    try {
+      const { data, error } = await this.chatStorage.supabase
+          .from('regions')
+          .select('id, name, code, country')
+          .eq('is_active', true);
+
+      if (error) throw error;
+
+      this.regions.clear();
+      data.forEach(region => this.regions.set(region.id, region));
+      console.log(`📍 Loaded ${data.length} regions`);
+    } catch (error) {
+      console.error('Failed to load regions:', error);
+    }
+  }
+
   private async clearWebhook(): Promise<void> {
     try {
       console.log('🧹 Clearing any existing webhooks...');
-      await this.makeAPIRequest('deleteWebhook');
+      await this.makeAPIRequest('deleteWebhook', {}, 5000);
       console.log('✅ Webhooks cleared successfully');
     } catch (error) {
       console.warn('⚠️ Could not clear webhooks (this is usually fine):', this.getErrorMessage(error));
     }
   }
 
-  private getErrorMessage(error: any): string {
-    if (error instanceof Error) {
-      return error.message;
+  private async startPolling(): Promise<void> {
+    if (this.isPolling) {
+      console.log('⚠️ Polling already active');
+      return;
     }
-    return String(error);
+
+    this.isPolling = true;
+    this.pollingAbortController = new AbortController();
+
+    console.log('🔄 Starting message polling...');
+
+    // Start message cleanup
+    this.startMessageCleanup();
+
+    // Start the polling loop
+    this.pollLoop();
   }
 
-  addCallbacks(callbacks: ServiceCallbacks): () => void {
-    this.callbacks = callbacks;
-    return () => {
-      this.callbacks = null;
-    };
+  private async pollLoop(): Promise<void> {
+    while (this.isPolling && !this.pollingAbortController?.signal.aborted) {
+      try {
+        await this.pollForUpdates();
+        this.updateConnectionHealth(true);
+        this.reconnectAttempts = 0;
+
+        // Short delay between successful polls
+        await this.sleep(1000);
+      } catch (error) {
+        console.error('❌ Polling error:', error);
+        this.updateConnectionHealth(false, error);
+
+        // Handle different types of errors
+        if (this.shouldSwitchToBrowserMode(error)) {
+          await this.switchToBrowserMode();
+          break;
+        }
+
+        // Exponential backoff for retries
+        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+        console.log(`⏳ Retrying in ${delay}ms (attempt ${this.reconnectAttempts + 1}/${this.maxReconnectAttempts})`);
+
+        await this.sleep(delay);
+        this.reconnectAttempts++;
+
+        if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+          console.error('❌ Max reconnection attempts reached, switching to browser mode');
+          await this.switchToBrowserMode();
+          break;
+        }
+      }
+    }
+  }
+
+  private shouldSwitchToBrowserMode(error: any): boolean {
+    const errorMessage = this.getErrorMessage(error);
+    return errorMessage.includes('409') ||
+        errorMessage.includes('Conflict') ||
+        errorMessage.includes('webhook') ||
+        errorMessage.includes('polling');
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  private stopPolling(): void {
+    if (this.isPolling) {
+      console.log('⏹️ Stopping polling...');
+      this.isPolling = false;
+
+      if (this.pollingAbortController) {
+        this.pollingAbortController.abort();
+        this.pollingAbortController = null;
+      }
+    }
+  }
+
+  private async pollForUpdates(): Promise<void> {
+    if (!this.isPolling || this.pollingAbortController?.signal.aborted) {
+      return;
+    }
+
+    const response = await this.makeAPIRequest('getUpdates', {
+      offset: this.lastUpdateId + 1,
+      limit: 100,
+      timeout: 30
+    }, 35000); // 35 second timeout for long polling
+
+    if (!response || !response.result) {
+      return;
+    }
+
+    const updates: TelegramUpdate[] = response.result;
+
+    // Process updates in order
+    updates.sort((a, b) => a.update_id - b.update_id);
+
+    for (const update of updates) {
+      if (this.pollingAbortController?.signal.aborted) {
+        break;
+      }
+
+      try {
+        await this.processUpdate(update);
+        this.lastUpdateId = Math.max(this.lastUpdateId, update.update_id);
+      } catch (error) {
+        console.error('❌ Error processing update:', error);
+        // Continue processing other updates
+      }
+    }
+  }
+
+  private async processUpdate(update: TelegramUpdate): Promise<void> {
+    if (update.message) {
+      await this.handleIncomingTelegramMessage(update.message, false);
+    }
+
+    if (update.edited_message) {
+      await this.handleIncomingTelegramMessage(update.edited_message, true);
+    }
+
+    if (update.callback_query) {
+      await this.handleCallbackQuery(update.callback_query);
+    }
+  }
+
+  private async handleCallbackQuery(callbackQuery: any): Promise<void> {
+    const chatId = callbackQuery.message.chat.id.toString();
+    const userId = callbackQuery.from.id.toString();
+    const callbackData = callbackQuery.data;
+
+    try {
+      if (callbackData?.startsWith('select_region_')) {
+        const regionId = callbackData.replace('select_region_', '');
+        await this.handleRegionSelection(chatId, regionId);
+      } else if (callbackData?.startsWith('select_office_')) {
+        const officeId = callbackData.replace('select_office_', '');
+        await this.selectOffice(userId, chatId, officeId);
+      }
+
+      // Answer callback query
+      if (callbackQuery.id) {
+        await this.makeAPIRequest('answerCallbackQuery', {
+          callback_query_id: callbackQuery.id
+        }, 5000);
+      }
+    } catch (error) {
+      console.error('❌ Error handling callback query:', error);
+    }
+  }
+
+  private async handleRegionSelection(chatId: string, regionId: string): Promise<void> {
+    try {
+      // Update conversation metadata
+      const { data: existingConversation } = await this.chatStorage.supabase
+          .from('conversations')
+          .select('id, metadata')
+          .eq('telegram_chat_identifier', chatId)
+          .single();
+
+      if (existingConversation) {
+        await this.chatStorage.supabase
+            .from('conversations')
+            .update({
+              metadata: { ...existingConversation.metadata, regionId }
+            })
+            .eq('id', existingConversation.id);
+      }
+
+      await this.showOfficesMenu(chatId, regionId);
+    } catch (error) {
+      console.error('❌ Error handling region selection:', error);
+      await this.sendMessage(chatId, 'Error selecting region. Please try again.');
+    }
+  }
+
+  private async makeAPIRequest(method: string, params: any = {}, timeoutMs: number = 10000): Promise<any> {
+    const url = `https://api.telegram.org/bot${this.botToken}/${method}`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+
+      if (!data.ok) {
+        throw new Error(`Telegram API Error: ${data.description}`);
+      }
+
+      return data;
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
   }
 
   private async getBotInfoFromAPI(): Promise<BotInfo> {
-    const response = await this.makeAPIRequest('getMe');
+    const response = await this.makeAPIRequest('getMe', {}, 5000);
     return response.result;
   }
 
@@ -340,278 +600,15 @@ export class TelegramBotService {
       }, timeoutMs);
 
       this.getBotInfoFromAPI()
-        .then(info => {
-          clearTimeout(timeout);
-          resolve(info);
-        })
-        .catch(error => {
-          clearTimeout(timeout);
-          reject(error);
-        });
+          .then(info => {
+            clearTimeout(timeout);
+            resolve(info);
+          })
+          .catch(error => {
+            clearTimeout(timeout);
+            reject(error);
+          });
     });
-  }
-
-  private async makeAPIRequest(method: string, params: any = {}): Promise<any> {
-    const url = `https://api.telegram.org/bot${this.botToken}/${method}`;
-    console.log(`📡 Making API request to ${method} with params:`, params);
-    try {
-      const response = await networkService.safeFetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(params)
-      });
-
-      if (!response) {
-        throw new Error('No response from Telegram API');
-      }
-
-      const data = await response.json();
-
-      if (!data.ok) {
-        if (response.status === 409) {
-          throw new Error(
-              `HTTP 409 Conflict: Another bot instance is already polling for updates, or a webhook is configured for this bot. ` +
-              `Please ensure only one instance of the bot is running and check if any webhooks are configured. ` +
-              `You may need to delete existing webhooks using the Telegram Bot API.`
-          );
-        }
-        if (response.status === 400) {
-          console.warn(`⚠️ Bad Request on ${method}: ${data.description}`);
-          return null; // Не кидаємо помилку, щоб не переходити в browser mode
-        }
-        throw new Error(`Telegram API Error: ${data.description}`);
-      }
-
-      return data;
-    } catch (error) {
-      if (!error.message.includes('Failed to fetch') && !error.message.includes('timeout')) {
-        console.error(`❌ Telegram API request failed for ${method}:`, error);
-      }
-      throw error;
-    }
-  }
-  
-  private startMessageCleanup(): void {
-    // Clean up old messages every hour
-    this.messageCleanupInterval = setInterval(() => {
-      const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-      
-      for (const [chatId, messages] of this.messages.entries()) {
-        const filteredMessages = messages.filter(msg => msg.timestamp > oneWeekAgo);
-        if (filteredMessages.length !== messages.length) {
-          this.messages.set(chatId, filteredMessages);
-          console.log(`🧹 Cleaned up ${messages.length - filteredMessages.length} old messages for chat ${chatId}`);
-        }
-      }
-    }, 60 * 60 * 1000); // Every hour
-  }
-
-  private startPolling(): void {
-    if (this.pollingTimeout) {
-      return;
-    }
-
-    console.log('🔄 Starting message polling...');
-    
-    // Start message cleanup
-    this.startMessageCleanup();
-    
-    const poll = async () => {
-      try {
-        await this.pollForUpdates();
-        this.updateConnectionHealth(true);
-      } catch (error) {
-        console.warn('❌ Polling error:', error);
-        this.updateConnectionHealth(false, error);
-      }
-      
-      // Schedule next poll only after current one completes
-      if (this.pollingTimeout !== null) {
-        this.pollingTimeout = setTimeout(poll, 2000);
-      }
-    };
-    
-    // Start the first poll
-    this.pollingTimeout = setTimeout(poll, 0);
-  }
-
-  private async switchToBrowserMode(): Promise<void> {
-    console.log('🔄 Switching to browser mode due to API conflict...');
-    
-    // Stop polling
-    if (this.pollingTimeout) {
-      clearTimeout(this.pollingTimeout);
-      this.pollingTimeout = null;
-    }
-    
-    // Switch to browser mode
-    this.isBrowserMode = true;
-    this.updateConnectionHealth(false);
-    
-    // Load existing conversations from database
-    await this.loadConversationsFromDatabase();
-    
-    console.log('✅ Successfully switched to browser mode');
-  }
-  private async loadRegions(): Promise<void> {
-    try {
-      const { data, error } = await this.chatStorage.supabase
-          .from('regions')
-          .select('id, name, code, country')
-          .eq('is_active', true);
-      if (error) throw error;
-      this.regions.clear();
-      data.forEach(region => this.regions.set(region.id, region));
-    } catch (error) {
-      console.error('Failed to load regions:', error);
-    }
-  }
-
-  private async loadOfficesByRegion(regionId: string): Promise<Office[]> {
-    try {
-      const { data: companies, error: companyError } = await this.chatStorage.supabase
-          .from('companies')
-          .select('id, office_id')
-          .eq('region_id', regionId)
-          .eq('status', 'active');
-      if (companyError) throw companyError;
-
-      if (!companies || companies.length === 0) {
-        return [];
-      }
-
-      const officeIds = companies.map(c => c.office_id).filter(id => id);
-      const { data: offices, error: officeError } = await this.chatStorage.supabase
-          .from('offices')
-          .select('id, name, address')
-          .in('id', officeIds)
-          .order('address', { ascending: true });
-      if (officeError) throw officeError;
-
-      const officesWithCompany = offices.map(office => ({
-        ...office,
-        companyId: companies.find(c => c.office_id === office.id)?.id
-      }));
-
-      return officesWithCompany;
-    } catch (error) {
-      console.error('Failed to load offices for region:', error);
-      return [];
-    }
-  }
-
-  private async selectOffice(userId: string, chatId: string, officeId: string): Promise<void> {
-    try {
-      // Отримуємо regionId із callback_query або іншого джерела
-      const { data: conversation } = await this.chatStorage.supabase
-          .from('conversations')
-          .select('metadata')
-          .eq('telegram_chat_identifier', chatId)
-          .single();
-      const regionId = conversation?.metadata?.regionId || 'f28b48e8-3bc7-4d7f-b6a1-ba7e81549256'; // Fallback UUID для Kyiv
-
-      const offices = await this.loadOfficesByRegion(regionId);
-      const office = offices.find(o => o.id === officeId);
-      if (!office) {
-        await this.sendMessage(chatId, 'Office not found.');
-        return;
-      }
-
-      const companyId = office.companyId;
-      if (!companyId) {
-        await this.sendMessage(chatId, 'No company associated with this office.');
-        return;
-      }
-
-      this.userOfficeMap.set(userId, officeId);
-      this.userCompanyMap.set(userId, companyId);
-
-      const { data: existingConversation } = await this.chatStorage.supabase
-          .from('conversations')
-          .select('id, metadata')
-          .eq('telegram_chat_identifier', chatId)
-          .single();
-
-      if (existingConversation) {
-        await this.chatStorage.supabase
-            .from('conversations')
-            .update({ metadata: { ...existingConversation.metadata, companyId, officeId } })
-            .eq('id', existingConversation.id);
-      } else {
-        const conversation: Conversation = {
-          id: crypto.randomUUID(),
-          type: 'direct',
-          name: `Chat ${chatId}`,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-          unreadCount: 0,
-          isArchived: false,
-          isMuted: false,
-          settings: {
-            retentionDays: 365,
-            autoBackup: true,
-            encryptionEnabled: false,
-            allowFileSharing: true,
-            maxFileSize: 50 * 1024 * 1024,
-            allowedFileTypes: ['image/*', 'application/pdf', 'text/*']
-          },
-          telegramChatIdentifier: chatId,
-          metadata: { companyId, officeId, regionId }
-        };
-        await this.chatStorage.storeConversation(conversation);
-      }
-
-      await this.sendMessage(chatId, `You selected office: ${office.name} (${office.address}). You can now communicate with the associated company.`);
-    } catch (error) {
-      console.error('Failed to select office:', error);
-      await this.sendMessage(chatId, 'Failed to select office. Please try again.');
-    }
-  }
-
-  private async showRegionsMenu(chatId: string): Promise<void> {
-    try {
-      const regions = Array.from(this.regions.values());
-      if (regions.length === 0) {
-        await this.sendMessage(chatId, 'No regions available.');
-        return;
-      }
-
-      const inlineKeyboard = regions.map(region => [
-        { text: region.name, callback_data: `select_region_${region.id}` }
-      ]);
-
-      await this.makeAPIRequest('sendMessage', {
-        chat_id: parseInt(chatId),
-        text: 'Please select a region:',
-        reply_markup: { inline_keyboard: inlineKeyboard }
-      });
-    } catch (error) {
-      console.error('Failed to show regions menu:', error);
-      await this.sendMessage(chatId, 'Failed to show regions. Please try again.');
-    }
-  }
-
-  private async showOfficesMenu(chatId: string, regionId: string): Promise<void> {
-    try {
-      const offices = await this.loadOfficesByRegion(regionId);
-      if (offices.length === 0) {
-        await this.sendMessage(chatId, 'No offices found in this region.');
-        return;
-      }
-
-      const inlineKeyboard = offices.map(office => [
-        { text: `${office.name} (${office.address})`, callback_data: `select_office_${office.id}` }
-      ]);
-
-      await this.makeAPIRequest('sendMessage', {
-        chat_id: parseInt(chatId),
-        text: 'Please select an office:',
-        reply_markup: { inline_keyboard: inlineKeyboard }
-      });
-    } catch (error) {
-      console.error('Failed to show offices menu:', error);
-      await this.sendMessage(chatId, 'Failed to show offices. Please try again.');
-    }
   }
 
   private async handleIncomingTelegramMessage(telegramMessage: TelegramMessage, isEdit: boolean): Promise<void> {
@@ -632,8 +629,16 @@ export class TelegramBotService {
       chatName = telegramMessage.chat.title || `Group ${chatId}`;
     }
 
+    // Handle /start command
+    if (telegramMessage.text?.startsWith('/start')) {
+      await this.sendMessage(chatId, 'Welcome to LegalFlow! Please select a region to continue.');
+      await this.showRegionsMenu(chatId);
+      return;
+    }
+
     // Process message content and attachments
     const { content, messageType, attachments } = this.processMessageContent(telegramMessage);
+
     try {
       // Get or create conversation UUID
       const conversationUuid = await this.chatStorage.getOrCreateConversationUUID(
@@ -673,18 +678,11 @@ export class TelegramBotService {
 
           console.log(`📝 Updated message ${telegramMessageId} in chat ${chatId}`);
         }
-
         return;
       } else if (existingMessage && !isEdit) {
         // Message already exists and this is not an edit, skip
         console.log(`⏭️ Skipping duplicate message ${telegramMessageId} in chat ${chatId}`);
         return;
-      }
-
-      // Handle /start command
-      if (telegramMessage.text?.startsWith('/start')) {
-        await this.sendMessage(chatId, 'Welcome to LegalFlow! Select a region.');
-        await this.showRegionsMenu(chatId);
       }
 
       // Create new message
@@ -703,7 +701,8 @@ export class TelegramBotService {
         status: 'delivered',
         attachments,
         chatId,
-        telegramMessageId
+        telegramMessageId,
+        direction: 'incoming'
       };
 
       // Store message locally
@@ -728,91 +727,9 @@ export class TelegramBotService {
       const logContent = messageType === 'text' ? serviceMessage.content.substring(0, 50) : `[${messageType.toUpperCase()}]`;
       console.log(`📨 ${isEdit ? 'Updated' : 'New'} ${messageType} message from ${senderName} in ${chatName}: ${logContent}...`);
     } catch (error) {
-      console.error('Failed to handle incoming Telegram message:', error);
+      console.error('❌ Failed to handle incoming Telegram message:', error);
     }
   }
-  private async pollForUpdates(): Promise<void> {
-    try {
-      const response = await networkService.safeFetch(
-          `https://api.telegram.org/bot${this.botToken}/getUpdates`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              offset: this.lastUpdateId + 1,
-              limit: 100,
-              timeout: 30
-            })
-          }
-      );
-
-      if (!response) {
-        throw new Error('No response from Telegram API');
-      }
-
-      const updates: TelegramUpdate[] = (await response.json()).result;
-
-      // Сортувати оновлення за update_id, щоб обробляти в правильному порядку
-      updates.sort((a, b) => a.update_id - b.update_id);
-
-      for (const update of updates) {
-        if (update.message) {
-          await this.handleIncomingTelegramMessage(update.message, false);
-        }
-        if (update.edited_message) {
-          await this.handleIncomingTelegramMessage(update.edited_message, true);
-        }
-        if (update.callback_query) {
-          const chatId = update.callback_query.message.chat.id.toString();
-          const userId = update.callback_query.from.id.toString();
-          const callbackData = update.callback_query.data;
-
-          if (callbackData.startsWith('select_region_')) {
-            const regionId = callbackData.replace('select_region_', '');
-            const { data: existingConversation } = await this.chatStorage.supabase
-                .from('conversations')
-                .select('id, metadata')
-                .eq('telegram_chat_identifier', chatId)
-                .single();
-            if (existingConversation) {
-              await this.chatStorage.supabase
-                  .from('conversations')
-                  .update({ metadata: { ...existingConversation.metadata, regionId } })
-                  .eq('id', existingConversation.id);
-            }
-            await this.showOfficesMenu(chatId, regionId);
-          } else if (callbackData.startsWith('select_office_')) {
-            const officeId = callbackData.replace('select_office_', '');
-            await this.selectOffice(userId, chatId, officeId);
-          }
-
-          // Обробка answerCallbackQuery із перевіркою
-          try {
-            if (update.callback_query.id) {
-              await this.makeAPIRequest('answerCallbackQuery', {
-                callback_query_id: update.callback_query.id
-              });
-              console.log(`✅ Answered callback query ${update.callback_query.id}`);
-            }
-          } catch (error: any) {
-            console.warn(`⚠️ Failed to answer callback query ${update.callback_query.id}:`, error.message);
-          }
-
-          this.lastUpdateId = Math.max(this.lastUpdateId, update.update_id);
-        }
-      }
-    } catch (error: any) {
-      console.error('❌ Polling error:', error);
-      if (error.message?.includes('Network') || error.message?.includes('timeout')) {
-        console.warn('⚠️ Network issue detected, retrying in 5 seconds...');
-        await new Promise(resolve => setTimeout(resolve, 5000));
-      } else {
-        console.error('Other polling error:', error);
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-    }
-  }
-
 
   private processMessageContent(telegramMessage: TelegramMessage): {
     content: string;
@@ -827,7 +744,7 @@ export class TelegramBotService {
     if (telegramMessage.photo && telegramMessage.photo.length > 0) {
       messageType = 'photo';
       const largestPhoto = telegramMessage.photo.reduce((prev, current) =>
-        (prev.file_size || 0) > (current.file_size || 0) ? prev : current
+          (prev.file_size || 0) > (current.file_size || 0) ? prev : current
       );
 
       attachments.push({
@@ -867,13 +784,6 @@ export class TelegramBotService {
 
       if (!content) {
         content = `📄 ${doc.file_name || 'Document'}`;
-
-        // Add specific handling for common document types
-        if (doc.mime_type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-          content = `📄 ${doc.file_name || 'Word Document'} (.docx)`;
-        } else if (doc.mime_type === 'application/pdf') {
-          content = `📄 ${doc.file_name || 'PDF Document'} (.pdf)`;
-        }
       }
     }
 
@@ -982,74 +892,164 @@ export class TelegramBotService {
     return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
   }
 
-  async getFileUrl(fileId: string): Promise<string | null> {
-    // In browser mode, we can't access files from Telegram API
-    if (this.isBrowserMode || typeof window !== 'undefined') {
-      return null;
-    }
-
+  private async showRegionsMenu(chatId: string): Promise<void> {
     try {
-      const response = await this.makeAPIRequest('getFile', { file_id: fileId });
-      const filePath = response.result.file_path;
-      return `https://api.telegram.org/file/bot${this.botToken}/${filePath}`;
+      const regions = Array.from(this.regions.values());
+      if (regions.length === 0) {
+        await this.sendMessage(chatId, 'No regions available. Please contact support.');
+        return;
+      }
+
+      const inlineKeyboard = regions.map(region => [
+        { text: region.name, callback_data: `select_region_${region.id}` }
+      ]);
+
+      await this.makeAPIRequest('sendMessage', {
+        chat_id: parseInt(chatId),
+        text: 'Please select a region:',
+        reply_markup: { inline_keyboard: inlineKeyboard }
+      }, 5000);
     } catch (error) {
-      console.error('Failed to get file URL:', error);
-      return null;
+      console.error('❌ Failed to show regions menu:', error);
+      await this.sendMessage(chatId, 'Failed to show regions. Please try again.');
     }
   }
 
-  private updateLocalMessage(chatId: string, messageId: string, updates: Partial<ServiceMessage>): void {
-    const chatMessages = this.messages.get(chatId);
-    if (chatMessages) {
-      const messageIndex = chatMessages.findIndex(m => m.id === messageId);
-      if (messageIndex !== -1) {
-        chatMessages[messageIndex] = { ...chatMessages[messageIndex], ...updates };
+  private async showOfficesMenu(chatId: string, regionId: string): Promise<void> {
+    try {
+      const offices = await this.loadOfficesByRegion(regionId);
+      if (offices.length === 0) {
+        await this.sendMessage(chatId, 'No offices found in this region. Please contact support.');
+        return;
       }
+
+      const inlineKeyboard = offices.map(office => [
+        { text: `${office.name} (${office.address})`, callback_data: `select_office_${office.id}` }
+      ]);
+
+      await this.makeAPIRequest('sendMessage', {
+        chat_id: parseInt(chatId),
+        text: 'Please select an office:',
+        reply_markup: { inline_keyboard: inlineKeyboard }
+      }, 5000);
+    } catch (error) {
+      console.error('❌ Failed to show offices menu:', error);
+      await this.sendMessage(chatId, 'Failed to show offices. Please try again.');
     }
   }
 
-  private storeMessage(chatId: string, message: ServiceMessage): void {
-    if (!this.messages.has(chatId)) {
-      this.messages.set(chatId, []);
-    }
-    
-    const chatMessages = this.messages.get(chatId)!;
-    
-    // Check for duplicates by telegram message ID or regular ID
-    const exists = chatMessages.find(m => 
-      m.id === message.id || 
-      (m.telegramMessageId && message.telegramMessageId && m.telegramMessageId === message.telegramMessageId)
-    );
-    
-    if (!exists) {
-      chatMessages.push(message);
-      
-      // Keep only last 1000 messages per chat
-      if (chatMessages.length > 1000) {
-        chatMessages.splice(0, chatMessages.length - 1000);
+  private async loadOfficesByRegion(regionId: string): Promise<Office[]> {
+    try {
+      const { data: companies, error: companyError } = await this.chatStorage.supabase
+          .from('companies')
+          .select('id, office_id')
+          .eq('region_id', regionId)
+          .eq('status', 'active');
+
+      if (companyError) throw companyError;
+
+      if (!companies || companies.length === 0) {
+        return [];
       }
-      
-      // Sort by timestamp to maintain chronological order
-      chatMessages.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+      const officeIds = companies.map(c => c.office_id).filter(id => id);
+      const { data: offices, error: officeError } = await this.chatStorage.supabase
+          .from('offices')
+          .select('id, name, address')
+          .in('id', officeIds)
+          .order('address', { ascending: true });
+
+      if (officeError) throw officeError;
+
+      const officesWithCompany = offices.map(office => ({
+        ...office,
+        companyId: companies.find(c => c.office_id === office.id)?.id
+      }));
+
+      return officesWithCompany;
+    } catch (error) {
+      console.error('❌ Failed to load offices for region:', error);
+      return [];
     }
   }
 
-  private updateChat(chatId: string, chatName: string, lastMessage: ServiceMessage): void {
-    const existingChat = this.chats.get(chatId);
-    
-    const chat: ServiceChat = {
-      id: chatId,
-      name: chatName,
-      lastMessage,
-      unreadCount: existingChat ? existingChat.unreadCount + 1 : 1,
-      lastActivity: lastMessage.timestamp
-    };
-    
-    this.chats.set(chatId, chat);
+  private async selectOffice(userId: string, chatId: string, officeId: string): Promise<void> {
+    try {
+      const { data: conversation } = await this.chatStorage.supabase
+          .from('conversations')
+          .select('metadata')
+          .eq('telegram_chat_identifier', chatId)
+          .single();
+
+      const regionId = conversation?.metadata?.regionId || 'f28b48e8-3bc7-4d7f-b6a1-ba7e81549256';
+
+      const offices = await this.loadOfficesByRegion(regionId);
+      const office = offices.find(o => o.id === officeId);
+
+      if (!office) {
+        await this.sendMessage(chatId, 'Office not found. Please try again.');
+        return;
+      }
+
+      const companyId = office.companyId;
+      if (!companyId) {
+        await this.sendMessage(chatId, 'No company associated with this office. Please contact support.');
+        return;
+      }
+
+      this.userOfficeMap.set(userId, officeId);
+      this.userCompanyMap.set(userId, companyId);
+
+      const { data: existingConversation } = await this.chatStorage.supabase
+          .from('conversations')
+          .select('id, metadata')
+          .eq('telegram_chat_identifier', chatId)
+          .single();
+
+      if (existingConversation) {
+        await this.chatStorage.supabase
+            .from('conversations')
+            .update({
+              metadata: {
+                ...existingConversation.metadata,
+                companyId,
+                officeId
+              }
+            })
+            .eq('id', existingConversation.id);
+      } else {
+        const conversation: Conversation = {
+          id: crypto.randomUUID(),
+          type: 'direct',
+          name: `Chat ${chatId}`,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          unreadCount: 0,
+          isArchived: false,
+          isMuted: false,
+          settings: {
+            retentionDays: 365,
+            autoBackup: true,
+            encryptionEnabled: false,
+            allowFileSharing: true,
+            maxFileSize: 50 * 1024 * 1024,
+            allowedFileTypes: ['image/*', 'application/pdf', 'text/*']
+          },
+          telegramChatIdentifier: chatId,
+          metadata: { companyId, officeId, regionId }
+        };
+        await this.chatStorage.storeConversation(conversation);
+      }
+
+      await this.sendMessage(chatId, `✅ You selected office: ${office.name} (${office.address})\n\nYou can now communicate with the associated company.`);
+    } catch (error) {
+      console.error('❌ Failed to select office:', error);
+      await this.sendMessage(chatId, 'Failed to select office. Please try again.');
+    }
   }
 
   async sendMessage(chatId: string, text: string, options: any = {}): Promise<boolean> {
-    // In browser mode, simulate message sending by storing locally
+    // In browser mode, simulate message sending
     if (this.isBrowserMode) {
       return this.simulateMessageSending(chatId, text);
     }
@@ -1061,7 +1061,7 @@ export class TelegramBotService {
         chat_id: parseInt(chatId),
         text,
         ...options
-      });
+      }, 10000);
 
       const telegramMessage = response.result;
 
@@ -1071,6 +1071,7 @@ export class TelegramBotService {
           'Bot',
           'User'
       );
+
       const serviceMessage: ServiceMessage = {
         id: crypto.randomUUID(),
         conversationId: conversationUuid,
@@ -1084,7 +1085,8 @@ export class TelegramBotService {
         isEdited: false,
         status: 'sent',
         chatId,
-        telegramMessageId: telegramMessage.message_id
+        telegramMessageId: telegramMessage.message_id,
+        direction: 'outgoing'
       };
 
       // Store the sent message
@@ -1107,7 +1109,6 @@ export class TelegramBotService {
       return true;
     } catch (error) {
       console.error('❌ Failed to send message:', error);
-      this.handleError('Failed to send message');
       return false;
     }
   }
@@ -1127,10 +1128,10 @@ export class TelegramBotService {
 
       // Store the message locally
       this.storeMessage(chatId, serviceMessage);
-      
+
       // Store in Supabase
       await this.storeMessageInSupabase(serviceMessage, chatId);
-      
+
       // Update chat
       const chat = this.chats.get(chatId);
       if (chat) {
@@ -1145,69 +1146,82 @@ export class TelegramBotService {
 
       return true;
     } catch (error) {
-      console.error('Failed to simulate message sending:', error);
+      console.error('❌ Failed to simulate message sending:', error);
       return false;
     }
   }
 
-  getAllChats(): ServiceChat[] {
-    return Array.from(this.chats.values()).sort((a, b) => 
-      b.lastActivity.getTime() - a.lastActivity.getTime()
+  private storeMessage(chatId: string, message: ServiceMessage): void {
+    if (!this.messages.has(chatId)) {
+      this.messages.set(chatId, []);
+    }
+
+    const chatMessages = this.messages.get(chatId)!;
+
+    // Check for duplicates
+    const exists = chatMessages.find(m =>
+        m.id === message.id ||
+        (m.telegramMessageId && message.telegramMessageId && m.telegramMessageId === message.telegramMessageId)
     );
+
+    if (!exists) {
+      chatMessages.push(message);
+
+      // Keep only last 1000 messages per chat
+      if (chatMessages.length > 1000) {
+        chatMessages.splice(0, chatMessages.length - 1000);
+      }
+
+      // Sort by timestamp
+      chatMessages.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+    }
   }
 
-  getMessagesForChat(chatId: string): ServiceMessage[] {
-    const messages = this.messages.get(chatId) || [];
-    return messages.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+  private updateChat(chatId: string, chatName: string, lastMessage: ServiceMessage): void {
+    const existingChat = this.chats.get(chatId);
+
+    const chat: ServiceChat = {
+      id: chatId,
+      name: chatName,
+      lastMessage,
+      unreadCount: existingChat ? existingChat.unreadCount + 1 : 1,
+      lastActivity: lastMessage.timestamp
+    };
+
+    this.chats.set(chatId, chat);
   }
 
-  markMessagesAsRead(chatId: string): void {
-    const chat = this.chats.get(chatId);
-    if (chat) {
-      chat.unreadCount = 0;
-      
-      // Update unread count and notify
-      if (this.callbacks?.onUnreadCountChange) {
-        this.callbacks.onUnreadCountChange(this.getUnreadCount());
+  private updateLocalMessage(chatId: string, messageId: string, updates: Partial<ServiceMessage>): void {
+    const chatMessages = this.messages.get(chatId);
+    if (chatMessages) {
+      const messageIndex = chatMessages.findIndex(m => m.id === messageId);
+      if (messageIndex !== -1) {
+        chatMessages[messageIndex] = { ...chatMessages[messageIndex], ...updates };
       }
     }
   }
 
-  getBotInfo(): BotInfo | null {
-    return this.botInfo;
-  }
-
-  isConnectionActive(): boolean {
-    // In browser mode, we're "connected" to the database but not to live Telegram
-    if (this.isBrowserMode) {
-      return false; // Indicate we're not connected to live Telegram API
+  private startMessageCleanup(): void {
+    if (this.messageCleanupInterval) {
+      return;
     }
-    return this.connectionHealth.isConnected;
-  }
 
-  getConnectionHealth(): ConnectionHealth {
-    return { ...this.connectionHealth };
-  }
+    this.messageCleanupInterval = setInterval(() => {
+      const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
-  async reconnect(): Promise<boolean> {
-    // In browser mode, just reload from database
-    if (this.isBrowserMode) {
-      // Clear local caches
-      this.chats.clear();
-      this.messages.clear();
-      
-      // Reload from database
-      await this.loadConversationsFromDatabase();
-      return true;
-    }
-    console.log('🔄 Reconnecting...');
-    this.disconnect();
-    return await this.initialize();
+      for (const [chatId, messages] of this.messages.entries()) {
+        const filteredMessages = messages.filter(msg => msg.timestamp > oneWeekAgo);
+        if (filteredMessages.length !== messages.length) {
+          this.messages.set(chatId, filteredMessages);
+          console.log(`🧹 Cleaned up ${messages.length - filteredMessages.length} old messages for chat ${chatId}`);
+        }
+      }
+    }, 60 * 60 * 1000); // Every hour
   }
 
   private updateConnectionHealth(isConnected: boolean, error?: any): void {
     this.connectionHealth.isConnected = isConnected;
-    
+
     if (isConnected) {
       this.connectionHealth.consecutiveErrors = 0;
       this.connectionHealth.lastSuccessfulPoll = new Date();
@@ -1222,69 +1236,19 @@ export class TelegramBotService {
     }
   }
 
-  private handleError(message: string): void {
-    if (this.callbacks?.onError) {
-      this.callbacks.onError(message);
+  private getErrorMessage(error: any): string {
+    if (error instanceof Error) {
+      return error.message;
     }
-  }
-
-  private startMessageCleanup(): void {
-    // Clean up old messages every hour
-    this.messageCleanupInterval = setInterval(() => {
-      const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-      
-      for (const [chatId, messages] of this.messages.entries()) {
-        const filteredMessages = messages.filter(msg => msg.timestamp > oneWeekAgo);
-        if (filteredMessages.length !== messages.length) {
-          this.messages.set(chatId, filteredMessages);
-          console.log(`🧹 Cleaned up ${messages.length - filteredMessages.length} old messages for chat ${chatId}`);
-        }
-      }
-    }, 60 * 60 * 1000); // Every hour
-  }
-
-  disconnect(): void {
-    if (this.isBrowserMode) {
-      this.isInitialized = false;
-      return;
-    }
-    console.log('🔌 Disconnecting Telegram Bot Service...');
-    
-    if (this.pollingTimeout) {
-      clearTimeout(this.pollingTimeout);
-      this.pollingTimeout = null;
-    }
-    
-    if (this.messageCleanupInterval) {
-      clearInterval(this.messageCleanupInterval);
-      this.messageCleanupInterval = null;
-    }
-    
-    this.isInitialized = false;
-    this.updateConnectionHealth(false);
-  }
-
-  static resetInstance(): void {
-    if (TelegramBotService.instance) {
-      TelegramBotService.instance.disconnect();
-      TelegramBotService.instance = null;
-    }
-  }
-
-  getUnreadCount(): number {
-    let totalUnread = 0;
-    for (const chat of this.chats.values()) {
-      totalUnread += chat.unreadCount;
-    }
-    return totalUnread;
+    return String(error);
   }
 
   private async storeMessageInSupabase(message: ServiceMessage, telegramChatIdString: string, telegramMessageId?: number): Promise<void> {
     try {
       const conversationUuid = await this.chatStorage.getOrCreateConversationUUID(
-        telegramChatIdString,
-        message.senderName,
-        message.direction === 'outgoing' ? 'User' : 'Bot'
+          telegramChatIdString,
+          message.senderName,
+          message.direction === 'outgoing' ? 'User' : 'Bot'
       );
 
       const chatMessage: ChatMessage = {
@@ -1321,7 +1285,7 @@ export class TelegramBotService {
 
       await this.chatStorage.storeMessage(chatMessage);
     } catch (error) {
-      console.error('Failed to store message in Supabase:', error);
+      console.error('❌ Failed to store message in Supabase:', error);
     }
   }
 
@@ -1351,28 +1315,126 @@ export class TelegramBotService {
         duration: att.duration,
         dimensions: att.dimensions
       })) || [],
-      messageType: chatMessage.messageType as ServiceMessage['messageType'] || 'text'
+      messageType: chatMessage.messageType as ServiceMessage['messageType'] || 'text',
+      conversationId: chatMessage.conversationId,
+      senderId: chatMessage.senderId,
+      recipientId: chatMessage.recipientId,
+      recipientName: chatMessage.recipientName
     };
+  }
+
+  // Public interface methods
+  addCallbacks(callbacks: ServiceCallbacks): () => void {
+    this.callbacks = callbacks;
+    return () => {
+      this.callbacks = null;
+    };
+  }
+
+  getAllChats(): ServiceChat[] {
+    return Array.from(this.chats.values()).sort((a, b) =>
+        b.lastActivity.getTime() - a.lastActivity.getTime()
+    );
+  }
+
+  getMessagesForChat(chatId: string): ServiceMessage[] {
+    const messages = this.messages.get(chatId) || [];
+    return messages.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+  }
+
+  markMessagesAsRead(chatId: string): void {
+    const chat = this.chats.get(chatId);
+    if (chat) {
+      chat.unreadCount = 0;
+
+      if (this.callbacks?.onUnreadCountChange) {
+        this.callbacks.onUnreadCountChange(this.getUnreadCount());
+      }
+    }
+  }
+
+  getBotInfo(): BotInfo | null {
+    return this.botInfo;
+  }
+
+  isConnectionActive(): boolean {
+    return this.connectionHealth.isConnected && !this.isBrowserMode;
+  }
+
+  getConnectionHealth(): ConnectionHealth {
+    return { ...this.connectionHealth };
   }
 
   isBrowserModeActive(): boolean {
     return this.isBrowserMode;
   }
 
-  // Clear all local caches (useful for refreshing state)
+  getUnreadCount(): number {
+    let totalUnread = 0;
+    for (const chat of this.chats.values()) {
+      totalUnread += chat.unreadCount;
+    }
+    return totalUnread;
+  }
+
+  async getFileUrl(fileId: string): Promise<string | null> {
+    if (this.isBrowserMode) {
+      return null;
+    }
+
+    try {
+      const response = await this.makeAPIRequest('getFile', { file_id: fileId }, 5000);
+      const filePath = response.result.file_path;
+      return `https://api.telegram.org/file/bot${this.botToken}/${filePath}`;
+    } catch (error) {
+      console.error('❌ Failed to get file URL:', error);
+      return null;
+    }
+  }
+
+  async reconnect(): Promise<boolean> {
+    console.log('🔄 Reconnecting...');
+
+    this.disconnect();
+    await this.sleep(1000);
+
+    return await this.initialize();
+  }
+
+  disconnect(): void {
+    console.log('🔌 Disconnecting Telegram Bot Service...');
+
+    // Stop polling
+    this.stopPolling();
+
+    // Clear cleanup interval
+    if (this.messageCleanupInterval) {
+      clearInterval(this.messageCleanupInterval);
+      this.messageCleanupInterval = null;
+    }
+
+    // Clear reconnect timeout
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+
+    // Reset state
+    this.isInitialized = false;
+    this.reconnectAttempts = 0;
+    this.updateConnectionHealth(false);
+  }
+
   clearLocalCaches(): void {
     this.chats.clear();
     this.messages.clear();
     this.chatStorage.clearConversationCache();
   }
-  private commandHandlers: CommandHandler[] = [
-    {
-      command: 'start',
-      description: 'Start the bot',
-      handler: async (telegramMessage, _args) => {
-        const chatId = telegramMessage.chat.id.toString();
-        await this.sendMessage(chatId, 'Welcome! I am your Telegram bot.');
-      }
+
+  static resetInstance(): void {
+    if (TelegramBotService.instance) {
+      TelegramBotService.instance.disconnect();
+      TelegramBotService.instance = null;
     }
-  ];
+  }
 }
