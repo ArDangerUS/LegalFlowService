@@ -72,8 +72,10 @@ export interface ConversationSettings {
 
 export class SupabaseChatStorage {
   private conversationUuidCache = new Map<string, string>();
-
-  constructor() {}
+  readonly supabase: typeof supabase;
+  constructor() {
+    this.supabase = supabase;
+  }
 
   /**
    * Check if Supabase is properly configured and connected
