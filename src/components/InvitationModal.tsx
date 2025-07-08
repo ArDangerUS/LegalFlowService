@@ -1,80 +1,133 @@
-// src/components/InvitationModal.tsx - Исправленная версия без бесконечного цикла
+// components/InvitationModal.tsx - Исправленная модалка приглашений
 
-import React, { useState, useEffect, useMemo } from 'react';
-import { User, Office, UserRole } from '../types/user';
-import { AuthService } from '../services/AuthService';
+import React, { useState, useEffect } from 'react';
+import { UserRole } from '../types/user';
+import { InvitationService } from '../services/invitationService';
+
+interface Office {
+  id: string;
+  name: string;
+  address?: string;
+  city: string;
+  phone?: string;
+  email?: string;
+}
 
 interface InvitationModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSendInvitation: (data: {
-    email: string;
-    role: UserRole;
-    officeId?: string;
-  }) => Promise<void>;
-  currentUser: User;
-  offices: Office[];
+  onSuccess: () => void;
+  currentUserRole: UserRole;
+  currentUserOfficeId?: string;
 }
 
 export const InvitationModal: React.FC<InvitationModalProps> = ({
   isOpen,
   onClose,
-  onSendInvitation,
-  currentUser,
-  offices = []
+  onSuccess,
+  currentUserRole,
+  currentUserOfficeId
 }) => {
   const [formData, setFormData] = useState({
     email: '',
     role: 'lawyer' as UserRole,
     officeId: ''
   });
+  const [availableOffices, setAvailableOffices] = useState<Office[]>([]);
+  const [availableRoles, setAvailableRoles] = useState<UserRole[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingOffices, setIsLoadingOffices] = useState(false);
   const [error, setError] = useState('');
 
-  // Используем useMemo для предотвращения пересоздания массивов на каждом рендере
-  const availableRoles = useMemo(() => {
-    if (!currentUser?.role) return [];
-    return AuthService.getAvailableRolesForInvitation(currentUser.role) || [];
-  }, [currentUser?.role]);
+  // Определяем доступные роли в зависимости от роли текущего пользователя
+  useEffect(() => {
+    const roles: UserRole[] = [];
 
-  const availableOffices = useMemo(() => {
-    if (!currentUser || !offices) return [];
-    return AuthService.getAvailableOfficesForInvitation(currentUser, offices) || [];
-  }, [currentUser, offices]);
+    if (currentUserRole === 'admin') {
+      roles.push('admin', 'office_admin', 'lawyer', 'client');
+    } else if (currentUserRole === 'office_admin') {
+      roles.push('office_admin', 'lawyer', 'client');
+    }
 
-  // Мемоизируем значения для useEffect
-  const defaultRole = useMemo(() => {
-    return (availableRoles && availableRoles.length > 0) ? availableRoles[0] : 'lawyer';
-  }, [availableRoles]);
+    setAvailableRoles(roles);
 
-  const defaultOfficeId = useMemo(() => {
-    return (availableOffices && availableOffices.length === 1) ? availableOffices[0].id : '';
-  }, [availableOffices]);
+    // Устанавливаем роль по умолчанию
+    if (roles.length > 0) {
+      const defaultRole = currentUserRole === 'admin' ? 'lawyer' : 'lawyer';
+      setFormData(prev => ({ ...prev, role: defaultRole }));
+    }
+  }, [currentUserRole]);
 
+  // Загружаем офисы при открытии модалки
   useEffect(() => {
     if (isOpen) {
-      // Сброс формы при открытии
-      setFormData({
-        email: '',
-        role: defaultRole,
-        officeId: defaultOfficeId
-      });
-      setError('');
+      loadOffices();
     }
-  }, [isOpen, defaultRole, defaultOfficeId]); // Используем мемоизированные значения
+  }, [isOpen, currentUserRole, currentUserOfficeId]);
+
+  const loadOffices = async () => {
+    setIsLoadingOffices(true);
+    try {
+      const token = localStorage.getItem('auth_token');
+      if (!token) {
+        throw new Error('Не найден токен авторизации');
+      }
+
+      const response = await fetch('/api/offices', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('Ошибка загрузки офисов');
+      }
+
+      const offices = await response.json();
+      setAvailableOffices(offices);
+
+      // Автоматически выбираем офис
+      if (offices.length === 1) {
+        setFormData(prev => ({ ...prev, officeId: offices[0].id }));
+      } else if (currentUserRole === 'office_admin' && currentUserOfficeId) {
+        // Админ офиса может приглашать только в свой офис
+        const userOffice = offices.find(office => office.id === currentUserOfficeId);
+        if (userOffice) {
+          setFormData(prev => ({ ...prev, officeId: userOffice.id }));
+        }
+      }
+    } catch (err) {
+      console.error('Ошибка загрузки офисов:', err);
+      setError(err instanceof Error ? err.message : 'Ошибка загрузки офисов');
+    } finally {
+      setIsLoadingOffices(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsLoading(true);
     setError('');
+    setIsLoading(true);
 
     try {
-      await onSendInvitation({
+      // Проверяем обязательные поля
+      if (!formData.email || !formData.role) {
+        throw new Error('Заполните все обязательные поля');
+      }
+
+      if (availableOffices.length > 1 && !formData.officeId) {
+        throw new Error('Выберите офис');
+      }
+
+      await InvitationService.createInvitation({
         email: formData.email,
         role: formData.role,
         officeId: formData.officeId || undefined
       });
-      onClose();
+
+      onSuccess();
+      handleClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка отправки приглашения');
     } finally {
@@ -85,8 +138,8 @@ export const InvitationModal: React.FC<InvitationModalProps> = ({
   const handleClose = () => {
     setFormData({
       email: '',
-      role: defaultRole,
-      officeId: defaultOfficeId
+      role: availableRoles[0] || 'lawyer',
+      officeId: ''
     });
     setError('');
     onClose();
@@ -96,7 +149,7 @@ export const InvitationModal: React.FC<InvitationModalProps> = ({
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg p-6 w-full max-w-md">
+      <div className="bg-white rounded-lg p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-medium text-gray-900">
             Пригласить пользователя
@@ -116,6 +169,7 @@ export const InvitationModal: React.FC<InvitationModalProps> = ({
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Email */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Email *
@@ -127,9 +181,11 @@ export const InvitationModal: React.FC<InvitationModalProps> = ({
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               placeholder="email@example.com"
               required
+              disabled={isLoading}
             />
           </div>
 
+          {/* Роль */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Роль *
@@ -139,6 +195,7 @@ export const InvitationModal: React.FC<InvitationModalProps> = ({
               onChange={(e) => setFormData(prev => ({ ...prev, role: e.target.value as UserRole }))}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               required
+              disabled={isLoading}
             >
               {availableRoles.map(role => (
                 <option key={role} value={role}>
@@ -151,17 +208,22 @@ export const InvitationModal: React.FC<InvitationModalProps> = ({
             </select>
           </div>
 
+          {/* Офис */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Офис {availableOffices.length > 1 && '*'}
             </label>
-            {availableOffices.length === 0 ? (
+            {isLoadingOffices ? (
               <div className="text-sm text-gray-500 p-2 bg-gray-50 rounded-lg">
+                Загрузка офисов...
+              </div>
+            ) : availableOffices.length === 0 ? (
+              <div className="text-sm text-red-600 p-2 bg-red-50 rounded-lg">
                 Нет доступных офисов для приглашения
               </div>
             ) : availableOffices.length === 1 ? (
               <div className="text-sm text-gray-700 p-2 bg-gray-50 rounded-lg">
-                {availableOffices[0]?.name || 'Офис без названия'}
+                {availableOffices[0].name} ({availableOffices[0].city})
               </div>
             ) : (
               <select
@@ -169,11 +231,12 @@ export const InvitationModal: React.FC<InvitationModalProps> = ({
                 onChange={(e) => setFormData(prev => ({ ...prev, officeId: e.target.value }))}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 required
+                disabled={isLoading}
               >
                 <option value="">Выберите офис</option>
                 {availableOffices.map(office => (
                   <option key={office.id} value={office.id}>
-                    {office.name}
+                    {office.name} ({office.city})
                   </option>
                 ))}
               </select>
@@ -229,7 +292,7 @@ export const InvitationModal: React.FC<InvitationModalProps> = ({
             <button
               type="submit"
               className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-              disabled={isLoading || availableOffices.length === 0}
+              disabled={isLoading || availableOffices.length === 0 || isLoadingOffices}
             >
               {isLoading ? 'Отправка...' : 'Отправить приглашение'}
             </button>

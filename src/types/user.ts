@@ -7,7 +7,7 @@ export interface User {
   name: string;
   email: string;
   role: UserRole;
-  officeId?: string;
+  office_id?: string;
   isActive: boolean;
   createdAt: string;
   lastLogin?: string;

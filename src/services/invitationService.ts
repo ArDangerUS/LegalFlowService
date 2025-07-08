@@ -1,4 +1,6 @@
-import {Invitation, UserRole} from "../types/user.ts";
+
+import { apiClient } from '../lib/apiClient';
+import { Invitation, UserRole } from '../types/user';
 
 export class InvitationService {
   static async createInvitation(data: {
@@ -6,69 +8,73 @@ export class InvitationService {
     role: UserRole;
     officeId?: string;
   }) {
-    const response = await fetch('/api/invitations', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(data),
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.message || 'Ошибка создания приглашения');
-    }
-
-    return response.json();
+    return apiClient.post('/invitations', data);
   }
 
   static async getInvitations(): Promise<Invitation[]> {
-    const response = await fetch('/api/invitations');
-    if (!response.ok) {
-      throw new Error('Ошибка получения приглашений');
-    }
-    return response.json();
+    return apiClient.get('/invitations');
   }
 
   static async resendInvitation(invitationId: string) {
-    const response = await fetch(`/api/invitations/${invitationId}/resend`, {
-      method: 'POST',
-    });
-
-    if (!response.ok) {
-      throw new Error('Ошибка повторной отправки приглашения');
-    }
-
-    return response.json();
+    return apiClient.post(`/invitations/${invitationId}/resend`);
   }
 
   static async deleteInvitation(invitationId: string) {
-    const response = await fetch(`/api/invitations/${invitationId}`, {
-      method: 'DELETE',
-    });
-
-    if (!response.ok) {
-      throw new Error('Ошибка удаления приглашения');
-    }
+    return apiClient.delete(`/invitations/${invitationId}`);
   }
 
   static async acceptInvitation(token: string, userData: {
     name: string;
     password: string;
   }) {
-    const response = await fetch(`/api/invitations/${token}/accept`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(userData),
-    });
+    return apiClient.post(`/invitations/${token}/accept`, userData);
+  }
 
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.message || 'Ошибка принятия приглашения');
-    }
+  static async getInvitationByToken(token: string) {
+    return apiClient.get(`/invitations/${token}`);
+  }
+}
 
-    return response.json();
+// src/services/officeService.ts - Обновленный сервис офисов
+
+import { apiClient } from '../lib/apiClient';
+
+export interface Office {
+  id: string;
+  name: string;
+  address?: string;
+  city: string;
+  phone?: string;
+  email?: string;
+  created_at?: string;
+}
+
+export class OfficeService {
+  static async getOffices(): Promise<Office[]> {
+    return apiClient.get('/offices');
+  }
+
+  static async createOffice(data: {
+    name: string;
+    address?: string;
+    city: string;
+    phone?: string;
+    email?: string;
+  }): Promise<Office> {
+    return apiClient.post('/offices', data);
+  }
+
+  static async updateOffice(id: string, data: {
+    name: string;
+    address?: string;
+    city: string;
+    phone?: string;
+    email?: string;
+  }): Promise<Office> {
+    return apiClient.put(`/offices/${id}`, data);
+  }
+
+  static async deleteOffice(id: string): Promise<void> {
+    return apiClient.delete(`/offices/${id}`);
   }
 }
