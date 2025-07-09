@@ -87,7 +87,7 @@ async function verifyAuth(req, res, next) {
     const token = authHeader.replace('Bearer ', '');
     console.log('🎫 Token received (first 20 chars):', token.substring(0, 20) + '...');
 
-    // Проверяем токен через Supabase
+    // Проверяем токен через Supabase Auth
     const { data: { user }, error } = await supabase.auth.getUser(token);
 
     if (error) {
@@ -115,13 +115,15 @@ async function verifyAuth(req, res, next) {
       // Если пользователь есть в auth, но нет в users таблице, создаем запись
       if (userError.code === 'PGRST116') {
         console.log('🆕 Creating user record in database...');
+
         const { data: newUser, error: createError } = await supabase
           .from('users')
           .insert({
             id: user.id,
             name: user.user_metadata?.name || user.email?.split('@')[0] || 'Unknown',
             email: user.email,
-            role: 'admin', // Временно делаем админом для тестирования
+            role: user.user_metadata?.role || 'lawyer',
+            office_id: user.user_metadata?.office_id || null,
             is_active: true
           })
           .select()
@@ -129,7 +131,10 @@ async function verifyAuth(req, res, next) {
 
         if (createError) {
           console.log('❌ Failed to create user record:', createError.message);
-          return res.status(500).json({ error: 'Failed to create user record' });
+          return res.status(500).json({
+            error: 'Failed to create user record',
+            details: createError.message
+          });
         }
 
         console.log('✅ User record created:', newUser);
@@ -137,12 +142,21 @@ async function verifyAuth(req, res, next) {
         return next();
       }
 
-      return res.status(401).json({ error: 'User not found in database' });
+      return res.status(401).json({
+        error: 'User not found in database',
+        details: userError.message
+      });
     }
 
     if (!userData) {
       console.log('❌ No user data found');
       return res.status(401).json({ error: 'User data not found' });
+    }
+
+    // Проверяем, активен ли пользователь
+    if (!userData.is_active) {
+      console.log('❌ User is not active');
+      return res.status(401).json({ error: 'User account is disabled' });
     }
 
     console.log('✅ Database user found:', {
@@ -153,11 +167,20 @@ async function verifyAuth(req, res, next) {
       office_id: userData.office_id
     });
 
+    // Обновляем last_login (необязательно, но полезно)
+    await supabase
+      .from('users')
+      .update({ last_login: new Date().toISOString() })
+      .eq('id', userData.id);
+
     req.user = userData;
     next();
   } catch (error) {
     console.error('💥 Auth verification error:', error);
-    res.status(401).json({ error: 'Authentication failed' });
+    res.status(401).json({
+      error: 'Authentication failed',
+      details: error.message
+    });
   }
 }
 
@@ -581,11 +604,13 @@ app.post('/api/invitations/:token/accept', async (req, res) => {
     const { token } = req.params;
     const { name, password } = req.body;
 
+    console.log('🎫 Processing invitation acceptance:', { token: token.substring(0, 8) + '...', name });
+
     if (!name || !password) {
       return res.status(400).json({ error: 'Name and password are required' });
     }
 
-    // Получаем приглашение
+    // Проверяем приглашение
     const { data: invitation, error: inviteError } = await supabase
       .from('invitations')
       .select('*')
@@ -593,53 +618,123 @@ app.post('/api/invitations/:token/accept', async (req, res) => {
       .single();
 
     if (inviteError || !invitation) {
+      console.log('❌ Invalid invitation:', inviteError?.message);
       return res.status(404).json({ error: 'Invitation not found' });
     }
 
     if (new Date(invitation.expires_at) < new Date()) {
+      console.log('❌ Invitation expired');
       return res.status(410).json({ error: 'Invitation has expired' });
     }
 
-    // Создаем пользователя в Supabase Auth
+    console.log('✅ Valid invitation found:', {
+      email: invitation.email,
+      role: invitation.role,
+      office_id: invitation.office_id
+    });
+
+    // Проверяем, не существует ли уже пользователь с таким email
+    const { data: existingUser } = await supabase
+      .from('users')
+      .select('id')
+      .eq('email', invitation.email)
+      .single();
+
+    if (existingUser) {
+      console.log('❌ User already exists:', invitation.email);
+      return res.status(400).json({ error: 'User with this email already exists' });
+    }
+
+    // Создаем пользователя в Supabase Auth с метаданными
     const { data: authUser, error: authError } = await supabase.auth.admin.createUser({
       email: invitation.email,
       password: password,
-      email_confirm: true
+      email_confirm: true,
+      user_metadata: {
+        name: name.trim(),
+        role: invitation.role,
+        office_id: invitation.office_id
+      }
     });
 
     if (authError) {
-      console.error('Supabase auth create user error:', authError);
-      return res.status(500).json({ error: 'Failed to create user account' });
+      console.error('❌ Auth error details:', authError);
+      return res.status(500).json({
+        error: 'Failed to create user account',
+        details: authError.message
+      });
     }
 
-    // Создаем запись в таблице users
-    const { data: user, error: userError } = await supabase
+    console.log('✅ Auth user created:', authUser.user.id);
+
+    // Ждем немного для возможного срабатывания триггера
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    // Проверяем, создалась ли запись в public.users через триггер
+    let { data: user, error: userError } = await supabase
       .from('users')
-      .insert({
-        id: authUser.user.id,
-        name: name.trim(),
-        email: invitation.email,
-        role: invitation.role,
-        office_id: invitation.office_id,
-        is_active: true
-      })
-      .select()
+      .select('*')
+      .eq('id', authUser.user.id)
       .single();
 
-    if (userError) {
-      console.error('Supabase create user record error:', userError);
-      // Если не удалось создать запись в users, удаляем auth пользователя
+    // Если триггер не сработал или записи нет, создаем вручную
+    if (userError && userError.code === 'PGRST116') {
+      console.log('🔧 Creating user record manually...');
+
+      const { data: manualUser, error: manualError } = await supabase
+        .from('users')
+        .insert({
+          id: authUser.user.id,
+          name: name.trim(),
+          email: invitation.email,
+          role: invitation.role,
+          office_id: invitation.office_id,
+          is_active: true
+        })
+        .select()
+        .single();
+
+      if (manualError) {
+        console.error('❌ Manual user creation error:', manualError);
+        // Удаляем auth пользователя если не удалось создать запись в users
+        await supabase.auth.admin.deleteUser(authUser.user.id);
+        return res.status(500).json({
+          error: 'Failed to create user record',
+          details: manualError.message
+        });
+      }
+
+      user = manualUser;
+      console.log('✅ User created manually:', user.id);
+    } else if (userError) {
+      console.error('❌ User lookup error:', userError);
       await supabase.auth.admin.deleteUser(authUser.user.id);
-      return res.status(500).json({ error: 'Failed to create user record' });
+      return res.status(500).json({
+        error: 'Failed to create user record',
+        details: userError.message
+      });
+    } else {
+      console.log('✅ User created by trigger:', user.id);
     }
 
-    // Удаляем использованное приглашение
-    await supabase
+    // Обновляем статус приглашения на "accepted"
+    const { error: updateError } = await supabase
       .from('invitations')
-      .delete()
+      .update({ status: 'accepted' })
       .eq('token', token);
 
-    console.log('✅ User registered successfully:', user);
+    if (updateError) {
+      console.error('❌ Failed to update invitation status:', updateError);
+      // Не прерываем процесс, но логируем ошибку
+    }
+
+    console.log('✅ User registered successfully:', {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      office_id: user.office_id
+    });
 
     res.json({
       message: 'Registration completed successfully',
@@ -647,15 +742,19 @@ app.post('/api/invitations/:token/accept', async (req, res) => {
         id: user.id,
         name: user.name,
         email: user.email,
-        role: user.role
+        role: user.role,
+        office_id: user.office_id
       }
     });
+
   } catch (error) {
-    console.error('Accept invitation error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('💥 Accept invitation error:', error);
+    res.status(500).json({
+      error: 'Internal server error',
+      details: error.message
+    });
   }
 });
-
 // Middleware для обработки ошибок
 app.use((error, req, res, next) => {
   console.error('Server error:', error);
