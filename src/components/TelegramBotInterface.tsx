@@ -262,7 +262,7 @@ export default function TelegramBotInterface({
             status: message.status,
             senderName: message.senderName,
             isEdited: message.isEdited,
-            messageType: message.messageType || 'text',
+            messageType: (message.messageType === 'photo' ? 'image' : message.messageType) || 'text',
             attachments: message.attachments
           };
 
@@ -469,38 +469,33 @@ export default function TelegramBotInterface({
     try {
       setUploadingFiles(true);
 
-      let attachments: FileAttachment[] = [];
-      if (selectedFiles.length > 0) {
-        attachments = await uploadFiles(selectedFiles);
-      }
-
-      const messageContent = newMessage.trim() || `📎 ${selectedFiles.length} file(s) attached`;
-      const messageType = selectedFiles.length > 0 ? 'file' : 'text';
-
       if (botService && isConnected) {
-        const success = await botService.sendMessage(activeChat, messageContent);
+        let allSuccess = true;
 
-        if (success) {
-          if (selectedFiles.length > 0) {
-            const messageWithFiles: Message = {
-              id: `file_${Date.now()}`,
-              chatId: activeChat,
-              content: messageContent,
-              timestamp: new Date(),
-              direction: 'outgoing',
-              status: 'sent',
-              senderName: currentUser?.name || 'You',
-              isEdited: false,
-              attachments,
-              messageType
-            };
-
-            setMessages(prev => {
-              const updated = [...prev, messageWithFiles];
-              return updated.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
-            });
+        // Якщо є файли — надсилаємо кожен файл окремо
+        if (selectedFiles.length > 0) {
+          console.log(`📤 Sending ${selectedFiles.length} file(s) to chat ${activeChat}`);
+          
+          for (const file of selectedFiles) {
+            console.log(`📎 Sending file: ${file.name} (${file.size} bytes, ${file.type})`);
+            
+            const success = await botService.sendMessageWithFile(
+              activeChat,
+              newMessage.trim() || `📎 ${file.name}`,
+              file
+            );
+            
+            console.log(`📎 File send result: ${success ? 'SUCCESS' : 'FAILED'}`);
+            allSuccess = allSuccess && success;
           }
+        } else {
+          // Тільки текст
+          console.log(`📤 Sending text message to chat ${activeChat}`);
+          const success = await botService.sendMessage(activeChat, newMessage.trim());
+          allSuccess = allSuccess && success;
+        }
 
+        if (allSuccess) {
           setNewMessage('');
           setSelectedFiles([]);
           addSystemMessage(`✅ Message sent successfully`);
@@ -843,10 +838,10 @@ export default function TelegramBotInterface({
                       {chat.status === 'online' && chat.id !== 'system' && (
                         <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-400 border-2 border-white rounded-full"></div>
                       )}
-                      {getActiveChat()?.unreadCount && getActiveChat()?.unreadCount > 0 && (
+                      {(getActiveChat()?.unreadCount || 0) > 0 && (
                         <div className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 border-2 border-white rounded-full flex items-center justify-center">
                           <span className="text-xs text-white font-medium">
-                            {getActiveChat()?.unreadCount! > 9 ? '9+' : getActiveChat()?.unreadCount}
+                            {(getActiveChat()?.unreadCount || 0) > 9 ? '9+' : getActiveChat()?.unreadCount || 0}
                           </span>
                         </div>
                       )}

@@ -26,6 +26,7 @@ export default function OfficeManagement() {
   const [formData, setFormData] = useState({
     name: '',
     address: '',
+    city: '',
     phone: '',
     email: ''
   });
@@ -68,6 +69,7 @@ export default function OfficeManagement() {
     setFormData({
       name: '',
       address: '',
+      city: '',
       phone: '',
       email: ''
     });
@@ -75,6 +77,9 @@ export default function OfficeManagement() {
 
   const handleCreateOffice = async () => {
     try {
+      if (!formData.name.trim() || !formData.city.trim()) {
+      console.error('Название и город обязательны');
+      return; }
       await caseService.createOffice(formData);
       setShowCreateModal(false);
       resetForm();
@@ -303,6 +308,10 @@ export default function OfficeManagement() {
                           <div className="text-sm font-medium text-gray-900">
                             {office.name}
                           </div>
+                           {/* ДОБАВЛЯЕМ ОТОБРАЖЕНИЕ ГОРОДА */}
+                            <div className="flex items-center space-x-1 text-sm font-medium text-blue-600 mb-1">
+                            <span>{office.city}</span>
+                            </div>
                           {office.address && (
                             <div className="flex items-center space-x-1 text-sm text-gray-500">
                               <MapPin className="h-3 w-3" />
@@ -396,6 +405,19 @@ export default function OfficeManagement() {
                   required
                 />
               </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                 Город *
+                </label>
+                <input
+                  type="text"
+                  value={formData.city}
+                  onChange={(e) => setFormData(prev => ({ ...prev, city: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="Например: Москва"
+                  required
+                />
+              </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -449,7 +471,7 @@ export default function OfficeManagement() {
               </button>
               <button
                 onClick={handleCreateOffice}
-                disabled={!formData.name.trim()}
+                disabled={!formData.name.trim() || !formData.city.trim()}
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300"
               >
                 Создать офис
