@@ -1,17 +1,70 @@
+// src/services/invitationService.ts - Обновленный сервис для приглашений
 
 import { apiClient } from '../lib/apiClient';
-import { Invitation, UserRole } from '../types/user';
+
+export interface InvitationData {
+  id: string;
+  email: string;
+  role: string;
+  officeId?: string;
+  officeName?: string;
+  expiresAt: string;
+  isExpired: boolean;
+}
+
+export interface AcceptInvitationData {
+  name: string;
+  password: string;
+}
 
 export class InvitationService {
+  // Получить приглашение по токену (публичный доступ)
+  static async getInvitationByToken(token: string): Promise<InvitationData> {
+    // Делаем запрос БЕЗ авторизации для публичной проверки приглашения
+    const response = await fetch(`/api/invitations/${token}`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || 'Не удалось загрузить приглашение');
+    }
+
+    return response.json();
+  }
+
+  // Принять приглашение (публичный доступ)
+  static async acceptInvitation(token: string, userData: AcceptInvitationData): Promise<any> {
+    // Делаем запрос БЕЗ авторизации для регистрации нового пользователя
+    const response = await fetch(`/api/invitations/${token}/accept`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(userData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || 'Ошибка регистрации');
+    }
+
+    return response.json();
+  }
+
+  // Остальные методы для авторизованных пользователей
   static async createInvitation(data: {
     email: string;
-    role: UserRole;
+    role: string;
     officeId?: string;
   }) {
     return apiClient.post('/invitations', data);
   }
 
-  static async getInvitations(): Promise<Invitation[]> {
+  static async getInvitations(): Promise<any[]> {
     return apiClient.get('/invitations');
   }
 
@@ -21,60 +74,5 @@ export class InvitationService {
 
   static async deleteInvitation(invitationId: string) {
     return apiClient.delete(`/invitations/${invitationId}`);
-  }
-
-  static async acceptInvitation(token: string, userData: {
-    name: string;
-    password: string;
-  }) {
-    return apiClient.post(`/invitations/${token}/accept`, userData);
-  }
-
-  static async getInvitationByToken(token: string) {
-    return apiClient.get(`/invitations/${token}`);
-  }
-}
-
-// src/services/officeService.ts - Обновленный сервис офисов
-
-import { apiClient } from '../lib/apiClient';
-
-export interface Office {
-  id: string;
-  name: string;
-  address?: string;
-  city: string;
-  phone?: string;
-  email?: string;
-  created_at?: string;
-}
-
-export class OfficeService {
-  static async getOffices(): Promise<Office[]> {
-    return apiClient.get('/offices');
-  }
-
-  static async createOffice(data: {
-    name: string;
-    address?: string;
-    city: string;
-    phone?: string;
-    email?: string;
-  }): Promise<Office> {
-    return apiClient.post('/offices', data);
-  }
-
-  static async updateOffice(id: string, data: {
-    name: string;
-    address?: string;
-    city: string;
-    phone?: string;
-    email?: string;
-  }): Promise<Office> {
-    return apiClient.put(`/offices/${id}`, data);
-  }
-
-  static async deleteOffice(id: string): Promise<void> {
-    return apiClient.delete(`/offices/${id}`);
   }
 }

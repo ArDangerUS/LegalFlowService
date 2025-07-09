@@ -1,30 +1,24 @@
+// src/pages/InvitationAcceptance.tsx - Обновленная страница регистрации
+
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { InvitationService } from '../services/invitationService';
-
-interface InvitationData {
-  email: string;
-  role: string;
-  officeName?: string;
-  inviterName: string;
-  expiresAt: string;
-}
+import { InvitationService, InvitationData } from '../services/invitationService';
 
 export const InvitationAcceptance: React.FC = () => {
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
-  
+
   const [invitationData, setInvitationData] = useState<InvitationData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [registering, setRegistering] = useState(false);
-  
+
   const [formData, setFormData] = useState({
     name: '',
     password: '',
     confirmPassword: ''
   });
-  
+
   const [validationErrors, setValidationErrors] = useState<{[key: string]: string}>({});
 
   // Загрузка данных приглашения
@@ -37,16 +31,33 @@ export const InvitationAcceptance: React.FC = () => {
       }
 
       try {
-        const response = await fetch(`/api/invitations/${token}`);
-        
+        console.log('🔍 Loading invitation for token:', token);
+
+        // Определяем правильный URL для API
+        const apiBaseUrl = window.location.port === '5173' || window.location.port === '3001'
+          ? 'http://localhost:3000'
+          : '';
+
+        const response = await fetch(`${apiBaseUrl}/api/invitations/${token}`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+
+        console.log('📡 API response status:', response.status);
+        console.log('📡 API response headers:', Object.fromEntries(response.headers.entries()));
+
         if (!response.ok) {
-          const errorData = await response.json();
+          const errorData = await response.json().catch(() => ({}));
           throw new Error(errorData.error || 'Не удалось загрузить приглашение');
         }
-        
+
         const data = await response.json();
+        console.log('✅ Invitation data loaded:', data);
         setInvitationData(data);
       } catch (err) {
+        console.error('❌ Error loading invitation:', err);
         setError(err instanceof Error ? err.message : 'Произошла ошибка');
       } finally {
         setLoading(false);
@@ -94,18 +105,40 @@ export const InvitationAcceptance: React.FC = () => {
     setError(null);
 
     try {
-      await InvitationService.acceptInvitation(token!, {
-        name: formData.name.trim(),
-        password: formData.password
+      console.log('🔐 Registering user with token:', token);
+
+      // Определяем правильный URL для API
+      const apiBaseUrl = window.location.port === '5173' || window.location.port === '3001'
+        ? 'http://localhost:3000'
+        : '';
+
+      const response = await fetch(`${apiBaseUrl}/api/invitations/${token}/accept`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: formData.name.trim(),
+          password: formData.password
+        })
       });
 
-      // Показываем сообщение об успехе
-      alert('Регистрация завершена успешно! Перенаправление на панель управления...');
-      
-      // Перенаправляем на страницу входа или дашборд
+      console.log('📡 Registration response status:', response.status);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Ошибка регистрации');
+      }
+
+      const result = await response.json();
+      console.log('✅ Registration successful:', result);
+
+      // Показываем сообщение об успехе и перенаправляем
+      alert('✅ Регистрация завершена успешно!\n\nПерейдите на страницу входа для авторизации.');
       navigate('/login');
-      
+
     } catch (err) {
+      console.error('❌ Registration error:', err);
       setError(err instanceof Error ? err.message : 'Ошибка регистрации');
     } finally {
       setRegistering(false);
@@ -187,7 +220,7 @@ export const InvitationAcceptance: React.FC = () => {
             <h1 className="text-3xl font-bold mb-2">LegalFlow</h1>
             <p className="text-blue-100">Система управления юридическими делами</p>
           </div>
-          
+
           <div className="bg-white px-6 py-4 border-x border-gray-200">
             <h2 className="text-2xl font-bold text-gray-900 mb-2">
               Завершить регистрацию
@@ -203,32 +236,24 @@ export const InvitationAcceptance: React.FC = () => {
           <div className="px-6 py-4 bg-blue-50 border-b border-blue-200 rounded-t-lg">
             <h3 className="text-lg font-medium text-blue-900">Детали приглашения</h3>
           </div>
-          
+
           <div className="px-6 py-4 space-y-3">
             <div className="flex justify-between">
               <span className="text-gray-600">Email:</span>
               <span className="font-medium text-gray-900">{invitationData?.email}</span>
             </div>
-            
             <div className="flex justify-between">
               <span className="text-gray-600">Роль:</span>
-              <span className="font-medium text-gray-900">
+              <span className="font-medium text-blue-600">
                 {getRoleDisplayName(invitationData?.role || '')}
               </span>
             </div>
-            
             {invitationData?.officeName && (
               <div className="flex justify-between">
                 <span className="text-gray-600">Офис:</span>
                 <span className="font-medium text-gray-900">{invitationData.officeName}</span>
               </div>
             )}
-            
-            <div className="flex justify-between">
-              <span className="text-gray-600">Приглашен:</span>
-              <span className="font-medium text-gray-900">{invitationData?.inviterName}</span>
-            </div>
-            
             <div className="flex justify-between">
               <span className="text-gray-600">Действительно до:</span>
               <span className="font-medium text-gray-900">
@@ -239,14 +264,18 @@ export const InvitationAcceptance: React.FC = () => {
         </div>
 
         {/* Форма регистрации */}
-        <form onSubmit={handleRegistration} className="bg-white shadow rounded-lg">
-          <div className="px-6 py-4 space-y-4">
+        <div className="bg-white shadow rounded-lg">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h3 className="text-lg font-medium text-gray-900">Создание аккаунта</h3>
+          </div>
+
+          <form onSubmit={handleRegistration} className="px-6 py-4 space-y-4">
+            {/* Имя */}
             <div>
-              <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
                 Полное имя *
               </label>
               <input
-                id="name"
                 type="text"
                 value={formData.name}
                 onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
@@ -257,16 +286,16 @@ export const InvitationAcceptance: React.FC = () => {
                 disabled={registering}
               />
               {validationErrors.name && (
-                <p className="text-red-600 text-sm mt-1">{validationErrors.name}</p>
+                <p className="mt-1 text-sm text-red-600">{validationErrors.name}</p>
               )}
             </div>
 
+            {/* Пароль */}
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
                 Пароль *
               </label>
               <input
-                id="password"
                 type="password"
                 value={formData.password}
                 onChange={(e) => setFormData(prev => ({ ...prev, password: e.target.value }))}
@@ -277,16 +306,16 @@ export const InvitationAcceptance: React.FC = () => {
                 disabled={registering}
               />
               {validationErrors.password && (
-                <p className="text-red-600 text-sm mt-1">{validationErrors.password}</p>
+                <p className="mt-1 text-sm text-red-600">{validationErrors.password}</p>
               )}
             </div>
 
+            {/* Подтверждение пароля */}
             <div>
-              <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
                 Подтвердите пароль *
               </label>
               <input
-                id="confirmPassword"
                 type="password"
                 value={formData.confirmPassword}
                 onChange={(e) => setFormData(prev => ({ ...prev, confirmPassword: e.target.value }))}
@@ -297,120 +326,40 @@ export const InvitationAcceptance: React.FC = () => {
                 disabled={registering}
               />
               {validationErrors.confirmPassword && (
-                <p className="text-red-600 text-sm mt-1">{validationErrors.confirmPassword}</p>
+                <p className="mt-1 text-sm text-red-600">{validationErrors.confirmPassword}</p>
               )}
             </div>
 
+            {/* Ошибка регистрации */}
             {error && (
               <div className="bg-red-50 border border-red-200 rounded-lg p-3">
                 <p className="text-red-800 text-sm">{error}</p>
               </div>
             )}
 
+            {/* Кнопка регистрации */}
             <button
               type="submit"
               disabled={registering}
-              className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition duration-200 font-medium"
+              className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
             >
               {registering ? (
-                <span className="flex items-center justify-center">
+                <>
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
                   Создание аккаунта...
-                </span>
+                </>
               ) : (
                 'Создать аккаунт'
               )}
             </button>
-          </div>
-        </form>
-
-        {/* Информация о безопасности */}
-        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-          <div className="flex items-start">
-            <div className="flex-shrink-0">
-              <span className="text-green-600 text-lg">🔒</span>
-            </div>
-            <div className="ml-3">
-              <h3 className="text-sm font-medium text-green-800">Безопасность</h3>
-              <p className="text-sm text-green-700 mt-1">
-                Ваши данные защищены шифрованием и соответствуют стандартам безопасности.
-              </p>
-            </div>
-          </div>
+          </form>
         </div>
-      </div>
-    </div>
-  );
-};
 
-// components/InvitationSuccessModal.tsx - Модальное окно успешной регистрации
-import React from 'react';
-
-interface InvitationSuccessModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  userName: string;
-  role: string;
-  officeName?: string;
-}
-
-export const InvitationSuccessModal: React.FC<InvitationSuccessModalProps> = ({
-  isOpen,
-  onClose,
-  userName,
-  role,
-  officeName
-}) => {
-  if (!isOpen) return null;
-
-  const getRoleDisplayName = (role: string) => {
-    const roleNames = {
-      admin: 'Администратор',
-      office_admin: 'Администратор офиса',
-      lawyer: 'Юрист',
-      client: 'Клиент'
-    };
-    return roleNames[role as keyof typeof roleNames] || role;
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg p-8 max-w-md w-full mx-4">
+        {/* Примечание о безопасности */}
         <div className="text-center">
-          <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-green-100 mb-4">
-            <span className="text-3xl">✅</span>
-          </div>
-          
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">
-            Регистрация завершена!
-          </h2>
-          
-          <p className="text-gray-600 mb-6">
-            Добро пожаловать в LegalFlow, {userName}!
+          <p className="text-xs text-gray-500">
+            🔒 Ваши данные защищены шифрованием и соответствуют стандартам безопасности.
           </p>
-
-          <div className="bg-blue-50 rounded-lg p-4 mb-6 text-left">
-            <h3 className="font-medium text-blue-900 mb-2">Ваши данные:</h3>
-            <div className="space-y-1 text-sm">
-              <p><span className="text-blue-700">Роль:</span> {getRoleDisplayName(role)}</p>
-              {officeName && (
-                <p><span className="text-blue-700">Офис:</span> {officeName}</p>
-              )}
-            </div>
-          </div>
-
-          <div className="space-y-3">
-            <button
-              onClick={onClose}
-              className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition duration-200"
-            >
-              Перейти к панели управления
-            </button>
-            
-            <p className="text-xs text-gray-500">
-              Перенаправление на панель управления...
-            </p>
-          </div>
         </div>
       </div>
     </div>
