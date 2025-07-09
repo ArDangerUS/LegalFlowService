@@ -379,10 +379,10 @@ export class SupabaseChatStorage {
       }
 
       const conversations = (data || []).map(this.mapConversationRowToConversation);
-      
+
       // Cache conversations for offline use
       offlineService.setOfflineData('conversations', conversations);
-      
+
       return conversations;
     } catch (error: any) {
       // If this is a fetch error, provide helpful guidance
@@ -396,7 +396,7 @@ export class SupabaseChatStorage {
           supabaseConfigured: supabaseConfig.isConfigured
         });
       }
-      
+
       return offlineService.getOfflineData('conversations');
     }
   }
@@ -412,14 +412,14 @@ export class SupabaseChatStorage {
   ): Promise<Conversation[]> {
     try {
       const conversations = await this._fetchConversationsForUser(userId, userRole, includeArchived);
-      
+
       if (restrictToConversation) {
-        return conversations.filter(conv => 
-          conv.id === restrictToConversation || 
+        return conversations.filter(conv =>
+          conv.id === restrictToConversation ||
           conv.telegramChatIdentifier === restrictToConversation
         );
       }
-      
+
       return conversations;
     } catch (error) {
       console.warn('⚠️ Could not load user conversations - running in offline mode');
@@ -547,7 +547,7 @@ export class SupabaseChatStorage {
           supabaseConfigured: supabaseConfig.isConfigured
         });
       }
-      
+
       return offlineService.getOfflineData('conversations');
     }
   }
@@ -739,7 +739,7 @@ export class SupabaseChatStorage {
   private async updateConversationLastMessage(conversationId: string, messageId: string): Promise<void> {
     const { error } = await supabase
       .from('conversations')
-      .update({ 
+      .update({
         last_message_id: messageId,
         updated_at: new Date().toISOString()
       })

@@ -387,20 +387,6 @@ export class TelegramBotService {
     }
   }
   
-  private startMessageCleanup(): void {
-    // Clean up old messages every hour
-    this.messageCleanupInterval = setInterval(() => {
-      const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-      
-      for (const [chatId, messages] of this.messages.entries()) {
-        const filteredMessages = messages.filter(msg => msg.timestamp > oneWeekAgo);
-        if (filteredMessages.length !== messages.length) {
-          this.messages.set(chatId, filteredMessages);
-          console.log(`🧹 Cleaned up ${messages.length - filteredMessages.length} old messages for chat ${chatId}`);
-        }
-      }
-    }, 60 * 60 * 1000); // Every hour
-  }
 
   private startPolling(): void {
     if (this.pollingTimeout) {
@@ -429,36 +415,6 @@ export class TelegramBotService {
     
     // Start the first poll
     this.pollingTimeout = setTimeout(poll, 0);
-  }
-
-  private async pollForUpdates(): Promise<void> {
-    try {
-      const response = await this.makeAPIRequest('getUpdates', {
-        offset: this.lastUpdateId + 1,
-        limit: 100,
-        timeout: 10
-      });
-
-      const updates: TelegramUpdate[] = response.result;
-
-      for (const update of updates) {
-        if (update.message) {
-          await this.handleIncomingTelegramMessage(update.message, false);
-        }
-        if (update.edited_message) {
-          await this.handleIncomingTelegramMessage(update.edited_message, true);
-        }
-        this.lastUpdateId = Math.max(this.lastUpdateId, update.update_id);
-      }
-    } catch (error: any) {
-      // Handle 409 Conflict specifically - switch to browser mode
-      if (error.message?.includes('409') || error.message?.includes('Conflict')) {
-        console.warn('⚠️ 409 Conflict detected - switching to browser mode');
-        await this.switchToBrowserMode();
-        return; // Don't re-throw the error
-      }
-      throw error;
-    }
   }
 
   private async switchToBrowserMode(): Promise<void> {
@@ -777,10 +733,11 @@ export class TelegramBotService {
         if (update.edited_message) {
           await this.handleIncomingTelegramMessage(update.edited_message, true);
         }
-        if (update.callback_query) {
-          const chatId = update.callback_query.message.chat.id.toString();
-          const userId = update.callback_query.from.id.toString();
-          const callbackData = update.callback_query.data;
+        if ((update as any).callback_query) {
+          const callback_query = (update as any).callback_query;
+          const chatId = callback_query.message.chat.id.toString();
+          const userId = callback_query.from.id.toString();
+          const callbackData = callback_query.data;
 
           if (callbackData.startsWith('select_region_')) {
             const regionId = callbackData.replace('select_region_', '');
@@ -791,7 +748,7 @@ export class TelegramBotService {
           }
 
           await this.makeAPIRequest('answerCallbackQuery', {
-            callback_query_id: update.callback_query.id
+            callback_query_id: callback_query.id
           });
         }
         this.lastUpdateId = Math.max(this.lastUpdateId, update.update_id);
@@ -806,30 +763,6 @@ export class TelegramBotService {
     }
   }
 
-  private async initialize(): Promise<void> {
-    if (!this.botToken) {
-      console.warn('⚠️ Bot token not provided, running in browser mode');
-      this.isBrowserMode = true;
-      return;
-    }
-
-    const connectionStatus = await networkService.testConnectivity();
-    if (!connectionStatus) {
-      console.warn('⚠️ No network connection, running in browser mode');
-      this.isBrowserMode = true;
-      return;
-    }
-
-    const { success, error } = await this.chatStorage.verifyConnection();
-    if (!success) {
-      console.error('Supabase connection failed:', error);
-      this.isBrowserMode = true;
-      return;
-    }
-
-    await this.loadRegions();
-    this.startPolling();
-  }
   private processMessageContent(telegramMessage: TelegramMessage): {
     content: string;
     messageType: ServiceMessage['messageType'];
