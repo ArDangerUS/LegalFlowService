@@ -707,18 +707,13 @@ export class TelegramBotService {
   }
   private async pollForUpdates(): Promise<void> {
     try {
-      const response = await networkService.safeFetch(
-          `https://api.telegram.org/bot${this.botToken}/getUpdates`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              offset: this.lastUpdateId + 1,
-              limit: 100,
-              timeout: 10
-            })
-          }
-      );
+      console.log('🔍 Making request to Telegram API...');
+      const response = await fetch(`https://api.telegram.org/bot${this.botToken}/getUpdates`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ offset: this.lastUpdateId + 1, limit: 100, timeout: 10 })
+      });
+      console.log('🔍 Response received:', response);
 
       if (!response) {
         throw new Error('No response from Telegram API');
