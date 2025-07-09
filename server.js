@@ -5,10 +5,22 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import cors from 'cors';
 import { createClient } from '@supabase/supabase-js';
-import dotenv from 'dotenv';
 
-// Загружаем переменные окружения
-dotenv.config();
+// Загружаем переменные окружения ПЕРВЫМ ДЕЛОМ
+import { config } from 'dotenv';
+const result = config();
+
+console.log('📁 Loading .env file...');
+if (result.error) {
+  console.error('❌ Error loading .env file:', result.error.message);
+  console.log('💡 Make sure .env file exists in the same directory as server.js');
+} else {
+  console.log('✅ .env file loaded successfully');
+  console.log('📋 Found variables:', Object.keys(result.parsed || {}).join(', '));
+}
+
+// ВАЖНО: Импортируем EmailService ПОСЛЕ загрузки .env
+import emailService from './emailService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -34,6 +46,12 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey, {
 });
 
 console.log('✅ Supabase initialized successfully');
+console.log('🔍 Environment check:');
+console.log('- NODE_ENV:', process.env.NODE_ENV);
+console.log('- PORT:', process.env.PORT);
+console.log('- FRONTEND_URL:', process.env.FRONTEND_URL);
+console.log('- EMAIL_USER:', process.env.EMAIL_USER ? '✅ configured' : '❌ not set');
+console.log('- EMAIL_PASS:', process.env.EMAIL_PASS ? '✅ configured' : '❌ not set');
 
 // CORS конфигурация
 const corsOptions = {
@@ -346,9 +364,15 @@ app.post('/api/invitations', verifyAuth, async (req, res) => {
 
     console.log('✅ Invitation created in Supabase:', invitation);
 
-    // ИМИТАЦИЯ отправки email
-    console.log(`📧 EMAIL SIMULATION: Отправлено приглашение на ${email}`);
-    console.log(`🔗 Registration link: ${req.protocol}://${req.get('host')}/invite/${token}`);
+    // Отправляем реальный email
+    const emailResult = await emailService.sendInvitation({
+      email: invitation.email,
+      role: invitation.role,
+      officeName: invitation.offices ? `${invitation.offices.name} (${invitation.offices.city})` : null,
+      token: invitation.token,
+      expiresAt: invitation.expires_at,
+      inviterName: req.user.name
+    });
 
     const response = {
       id: invitation.id,
@@ -359,7 +383,12 @@ app.post('/api/invitations', verifyAuth, async (req, res) => {
       token: invitation.token,
       expiresAt: invitation.expires_at,
       createdAt: invitation.created_at,
-      message: `Приглашение успешно отправлено на ${email}!`
+      message: emailResult.simulation
+        ? `Приглашение создано! (Email симуляция - настройте EMAIL_USER и EMAIL_PASS в .env для реальной отправки)`
+        : emailResult.success
+          ? `Приглашение успешно отправлено на ${email}!`
+          : `Приглашение создано, но email не отправлен: ${emailResult.error}`,
+      emailSent: emailResult.success && !emailResult.simulation
     };
 
     console.log('📤 Sending response:', response);
