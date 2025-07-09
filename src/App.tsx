@@ -45,7 +45,8 @@ function App() {
     clearAll
   } = useNotifications();
 
-  const botToken = "7902383724:AAGosG9WLCEuBdXeZhKHP7Qj-P0gjkiWn30";
+  const botToken = "7242799466:AAEf-t8CSqzjOdVmVwWllns0ZVu7tvR_VD0";
+  // const botToken = "7902383724:AAGosG9WLCEuBdXeZhKHP7Qj-P0gjkiWn30";
 
   // Handle new Telegram message notifications
   const handleTelegramNotification = (notification: {

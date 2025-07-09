@@ -527,7 +527,8 @@ export class TelegramBotService {
             encryptionEnabled: false,
             allowFileSharing: true,
             maxFileSize: 50 * 1024 * 1024,
-            allowedFileTypes: ['image/*', 'application/pdf', 'text/*']
+            allowedFileTypes: ['image/*', 'application/pdf', 'text/*'],
+            supportedDocumentTypes: ['pdf', 'doc', 'docx', 'txt']
           },
           telegramChatIdentifier: chatId,
           metadata: { companyId }
@@ -629,8 +630,23 @@ export class TelegramBotService {
           editedAt: new Date((telegramMessage.edit_date || telegramMessage.date) * 1000),
           isEdited: true,
           timestamp: new Date(telegramMessage.date * 1000),
-          messageType,
-          attachments
+          messageType: (
+            messageType === 'photo' ? 'image' :
+            messageType === 'voice' ? 'audio' :
+            messageType === 'sticker' ? 'image' :
+            messageType
+          ) || 'text',
+          attachments: attachments.map(att => ({
+            id: att.id,
+            fileName: att.fileName,
+            fileSize: att.fileSize,
+            mimeType: att.mimeType,
+            url: att.url,
+            localPath: undefined,
+            thumbnail: att.thumbnail?.fileId,
+            duration: att.duration,
+            dimensions: att.dimensions
+          }))
         };
 
         const success = await this.chatStorage.updateMessage(existingMessage.id, updatedMessage);
@@ -665,26 +681,56 @@ export class TelegramBotService {
       const messageId = crypto.randomUUID();
       const serviceMessage: ServiceMessage = {
         id: messageId,
-        conversationId: conversationUuid,
-        senderId: telegramMessage.from.id.toString(),
-        senderName,
-        recipientId: 'Bot',
-        recipientName: 'Bot',
         content,
         messageType,
         timestamp: new Date(telegramMessage.date * 1000),
-        isEdited: isEdit,
+        direction: 'incoming',
         status: 'delivered',
-        attachments,
+        senderName,
+        isEdited: isEdit,
         chatId,
-        telegramMessageId
+        telegramMessageId,
+        attachments
       };
 
       // Store message locally
       this.storeMessage(chatId, serviceMessage);
 
       // Store in Supabase
-      await this.chatStorage.storeMessage(serviceMessage);
+      const chatMessage: ChatMessage = {
+        id: serviceMessage.id,
+        conversationId: conversationUuid,
+        senderId: telegramMessage.from.id.toString(),
+        senderName: serviceMessage.senderName,
+        recipientId: 'Bot',
+        recipientName: 'Bot',
+        content: serviceMessage.content,
+        messageType: (
+          serviceMessage.messageType === 'photo' ? 'image' :
+          serviceMessage.messageType === 'voice' ? 'audio' :
+          serviceMessage.messageType === 'sticker' ? 'image' :
+          serviceMessage.messageType
+        ) || 'text',
+        timestamp: serviceMessage.timestamp,
+        editedAt: serviceMessage.isEdited ? serviceMessage.timestamp : undefined,
+        isEdited: serviceMessage.isEdited,
+        status: serviceMessage.status,
+        attachments: (serviceMessage.attachments || []).map(att => ({
+          id: att.id,
+          fileName: att.fileName,
+          fileSize: att.fileSize,
+          mimeType: att.mimeType,
+          url: att.url,
+          localPath: undefined,
+          thumbnail: att.thumbnail?.fileId,
+          duration: att.duration,
+          dimensions: att.dimensions
+        })),
+        metadata: {},
+        isDeleted: false,
+        telegramMessageId: serviceMessage.telegramMessageId
+      };
+      await this.chatStorage.storeMessage(chatMessage);
 
       // Update or create chat
       this.updateChat(chatId, chatName, serviceMessage);
@@ -699,7 +745,7 @@ export class TelegramBotService {
         this.callbacks.onNewMessage(serviceMessage);
       }
 
-      const logContent = messageType === 'text' ? serviceMessage.content.substring(0, 50) : `[${messageType.toUpperCase()}]`;
+      const logContent = (messageType || 'text') === 'text' ? serviceMessage.content.substring(0, 50) : `[${(messageType || 'text').toUpperCase()}]`;
       console.log(`📨 ${isEdit ? 'Updated' : 'New'} ${messageType} message from ${senderName} in ${chatName}: ${logContent}...`);
     } catch (error) {
       console.error('Failed to handle incoming Telegram message:', error);
@@ -993,19 +1039,38 @@ export class TelegramBotService {
   }
 
   async sendMessage(chatId: string, text: string, options: any = {}): Promise<boolean> {
+    return this.sendMessageWithFile(chatId, text, undefined, options);
+  }
+
+  async sendMessageWithFile(chatId: string, text: string, file?: File, options: any = {}): Promise<boolean> {
     // In browser mode, simulate message sending by storing locally
     if (this.isBrowserMode) {
-      return this.simulateMessageSending(chatId, text);
+      return this.simulateMessageSending(chatId, text, file);
     }
 
     try {
       console.log(`📤 Sending message to chat ${chatId}: ${text.substring(0, 50)}...`);
 
-      const response = await this.makeAPIRequest('sendMessage', {
-        chat_id: parseInt(chatId),
-        text,
-        ...options
-      });
+      let response;
+      if (file) {
+        // Send file with caption
+        const formData = new FormData();
+        formData.append('chat_id', chatId);
+        formData.append('caption', text);
+        formData.append('document', file);
+        
+        response = await fetch(`https://api.telegram.org/bot${this.botToken}/sendDocument`, {
+          method: 'POST',
+          body: formData
+        });
+      } else {
+        // Send text message
+        response = await this.makeAPIRequest('sendMessage', {
+          chat_id: parseInt(chatId),
+          text,
+          ...options
+        });
+      }
 
       const telegramMessage = response.result;
 
@@ -1017,23 +1082,53 @@ export class TelegramBotService {
       );
       const serviceMessage: ServiceMessage = {
         id: crypto.randomUUID(),
-        conversationId: conversationUuid,
-        senderId: 'Bot',
-        senderName: this.botInfo?.first_name || 'Bot',
-        recipientId: chatId,
-        recipientName: 'User',
         content: text,
         messageType: 'text',
         timestamp: new Date(telegramMessage.date * 1000),
-        isEdited: false,
+        direction: 'outgoing',
         status: 'sent',
+        senderName: this.botInfo?.first_name || 'Bot',
+        isEdited: false,
         chatId,
         telegramMessageId: telegramMessage.message_id
       };
 
       // Store the sent message
       this.storeMessage(chatId, serviceMessage);
-      await this.chatStorage.storeMessage(serviceMessage);
+              const chatMessage: ChatMessage = {
+          id: serviceMessage.id,
+          conversationId: conversationUuid,
+          senderId: 'Bot',
+          senderName: serviceMessage.senderName,
+          recipientId: chatId,
+          recipientName: 'User',
+        content: serviceMessage.content,
+        messageType: (
+          serviceMessage.messageType === 'photo' ? 'image' :
+          serviceMessage.messageType === 'voice' ? 'audio' :
+          serviceMessage.messageType === 'sticker' ? 'image' :
+          serviceMessage.messageType
+        ) || 'text',
+        timestamp: serviceMessage.timestamp,
+        editedAt: serviceMessage.isEdited ? serviceMessage.timestamp : undefined,
+        isEdited: serviceMessage.isEdited,
+        status: serviceMessage.status,
+        attachments: (serviceMessage.attachments || []).map(att => ({
+          id: att.id,
+          fileName: att.fileName,
+          fileSize: att.fileSize,
+          mimeType: att.mimeType,
+          url: att.url,
+          localPath: undefined,
+          thumbnail: att.thumbnail?.fileId,
+          duration: att.duration,
+          dimensions: att.dimensions
+        })),
+        metadata: {},
+        isDeleted: false,
+        telegramMessageId: serviceMessage.telegramMessageId
+      };
+      await this.chatStorage.storeMessage(chatMessage);
 
       // Update chat
       const chat = this.chats.get(chatId);
@@ -1056,7 +1151,7 @@ export class TelegramBotService {
     }
   }
 
-  private async simulateMessageSending(chatId: string, text: string): Promise<boolean> {
+  private async simulateMessageSending(chatId: string, text: string, file?: File): Promise<boolean> {
     try {
       const serviceMessage: ServiceMessage = {
         id: crypto.randomUUID(),
@@ -1066,7 +1161,16 @@ export class TelegramBotService {
         status: 'sent',
         senderName: 'You',
         isEdited: false,
-        chatId
+        chatId,
+        messageType: file ? 'document' : 'text',
+        attachments: file ? [{
+          id: crypto.randomUUID(),
+          fileName: file.name,
+          fileSize: file.size,
+          mimeType: file.type,
+          fileId: '',
+          url: URL.createObjectURL(file)
+        }] : undefined
       };
 
       // Store the message locally
@@ -1239,12 +1343,17 @@ export class TelegramBotService {
         recipientId: message.direction === 'outgoing' ? telegramChatIdString : 'bot',
         recipientName: message.direction === 'outgoing' ? 'User' : 'Bot',
         content: message.content,
-        messageType: message.messageType || 'text',
+        messageType: (
+          message.messageType === 'photo' ? 'image' :
+          message.messageType === 'voice' ? 'audio' :
+          message.messageType === 'sticker' ? 'image' :
+          message.messageType
+        ) || 'text',
         timestamp: message.timestamp,
         editedAt: message.isEdited ? message.timestamp : undefined,
         isEdited: message.isEdited,
         status: message.status,
-        attachments: message.attachments?.map(att => ({
+        attachments: (message.attachments || []).map(att => ({
           id: att.id,
           fileName: att.fileName,
           fileSize: att.fileSize,
@@ -1254,7 +1363,7 @@ export class TelegramBotService {
           thumbnail: att.thumbnail?.fileId,
           duration: att.duration,
           dimensions: att.dimensions
-        })) || [],
+        })),
         metadata: {
           direction: message.direction,
           telegramFileIds: message.attachments?.map(att => att.fileId) || []
@@ -1280,7 +1389,7 @@ export class TelegramBotService {
       isEdited: chatMessage.isEdited,
       chatId: chatId,
       telegramMessageId: chatMessage.telegramMessageId,
-      attachments: chatMessage.attachments?.map(att => ({
+      attachments: (chatMessage.attachments || []).map(att => ({
         id: att.id,
         fileName: att.fileName,
         fileSize: att.fileSize,
@@ -1295,7 +1404,12 @@ export class TelegramBotService {
         duration: att.duration,
         dimensions: att.dimensions
       })) || [],
-      messageType: chatMessage.messageType as ServiceMessage['messageType'] || 'text'
+      messageType: (
+        chatMessage.messageType === 'photo' ? 'image' :
+        chatMessage.messageType === 'voice' ? 'audio' :
+        chatMessage.messageType === 'sticker' ? 'image' :
+        chatMessage.messageType
+      ) || 'text'
     };
   }
 
