@@ -264,10 +264,17 @@ export const UserManagement: React.FC<UserManagementProps> = ({
       <InvitationModal
         isOpen={showInvitationModal}
         onClose={() => setShowInvitationModal(false)}
-        onSendInvitation={handleSendInvitation}
-        currentUser={currentUser}
-        offices={offices}
-      />
+        onSuccess={(message) => {
+        setShowInvitationModal(false);
+        onUserUpdate(); // Обновляем список пользователей
+        if (message) {
+        // Можно использовать toast или alert
+        console.log('✅', message);
+        // toast.success(message);
+      }
+    }}
+  currentUser={currentUser}
+/>
     </div>
   );
 };
