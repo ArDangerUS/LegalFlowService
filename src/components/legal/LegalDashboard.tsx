@@ -445,7 +445,7 @@ export default function LegalDashboard({
               </div>
             </div>
             
-            <div className="bg-white rounded-xl shadow-lg border border-gray-200 h-[calc(100vh-280px)] relative overflow-hidden">
+            <div className="bg-white rounded-xl shadow-lg border border-gray-200 h-[calc(120vh-170px)] relative overflow-hidden">
               <TelegramBotInterface 
                 botToken={botToken} 
                 currentUser={currentUser}
