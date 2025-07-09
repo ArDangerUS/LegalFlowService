@@ -999,7 +999,7 @@ export default function TelegramBotInterface({
             </div>
 
             {/* Messages Area */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50 min-h-[62px] max-h-[62vh]">
               {getActiveChatMessages().map((message, index) => (
                 <div
                   key={`${message.chatId}-${message.id}-${index}`}
