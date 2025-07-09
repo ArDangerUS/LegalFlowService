@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import {User, Office, UserRole} from '../../types/user';
-import { AuthService } from '../../services/authService';
+import { AuthService } from '../../services/AuthService';
 import { InvitationModal } from '../InvitationModal';
 import { PendingInvitations } from '../PendingInvitations';
 import { useInvitations } from '../../hooks/useInvitations';

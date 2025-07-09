@@ -1,6 +1,6 @@
 import React from 'react';
 import { Invitation, User } from '../types/user';
-import { AuthService } from '../services/authService';
+import { AuthService } from '../services/AuthService';
 
 interface PendingInvitationsProps {
   invitations: Invitation[];
