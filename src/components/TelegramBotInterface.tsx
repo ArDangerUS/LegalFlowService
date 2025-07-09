@@ -1,18 +1,18 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { 
-  Send, 
-  Bot, 
-  Shield, 
-  AlertTriangle, 
-  CheckCircle, 
-  Clock, 
-  Users, 
-  RefreshCw, 
-  Trash2, 
-  Paperclip, 
-  Download, 
-  X, 
-  Search, 
+import {
+  Send,
+  Bot,
+  Shield,
+  AlertTriangle,
+  CheckCircle,
+  Clock,
+  Users,
+  RefreshCw,
+  Trash2,
+  Paperclip,
+  Download,
+  X,
+  Search,
   Filter,
   Image,
   FileText,
@@ -86,8 +86,8 @@ interface TelegramBotInterfaceProps {
   onNotification?: (notification: any) => void;
 }
 
-export default function TelegramBotInterface({ 
-  botToken, 
+export default function TelegramBotInterface({
+  botToken,
   currentUser,
   restrictToConversation,
   runInBackground = false,
@@ -113,11 +113,11 @@ export default function TelegramBotInterface({
   const [isSoundEnabled, setIsSoundEnabled] = useState(true);
   const [chatSettings, setChatSettings] = useState(false);
   const [totalUnreadCount, setTotalUnreadCount] = useState(0);
-  
+
   const [botService] = useState(() => TelegramBotService.getInstance(botToken));
   const [chatStorage] = useState(() => new SupabaseChatStorage());
   const [unsubscribe, setUnsubscribe] = useState<(() => void) | null>(null);
-  
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
@@ -127,7 +127,7 @@ export default function TelegramBotInterface({
     if (botService && botToken) {
       initializeBot();
     }
-    
+
     return () => {
       if (unsubscribe) {
         unsubscribe();
@@ -149,7 +149,7 @@ export default function TelegramBotInterface({
   useEffect(() => {
     // Filter chats based on search query
     if (searchQuery.trim()) {
-      setFilteredChats(chats.filter(chat => 
+      setFilteredChats(chats.filter(chat =>
         chat.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         chat.lastMessage?.content.toLowerCase().includes(searchQuery.toLowerCase())
       ));
@@ -162,7 +162,7 @@ export default function TelegramBotInterface({
   useEffect(() => {
     const unreadCount = chats.reduce((total, chat) => total + chat.unreadCount, 0);
     setTotalUnreadCount(unreadCount);
-    
+
     // Update document title with unread count
     const originalTitle = 'LegalFlow - Телеграм Связь';
     if (unreadCount > 0) {
@@ -181,14 +181,14 @@ export default function TelegramBotInterface({
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       const oscillator = audioContext.createOscillator();
       const gainNode = audioContext.createGain();
-      
+
       oscillator.connect(gainNode);
       gainNode.connect(audioContext.destination);
-      
+
       oscillator.frequency.value = 800;
       oscillator.type = 'sine';
       gainNode.gain.value = 0.3;
-      
+
       oscillator.start();
       oscillator.stop(audioContext.currentTime + 0.1);
     }
@@ -197,7 +197,7 @@ export default function TelegramBotInterface({
   const loadConversationsFromSupabase = async () => {
     try {
       let conversations;
-      
+
       if (restrictToConversation) {
         conversations = await chatStorage.getConversationsForUser(
           currentUser?.id || '',
@@ -207,7 +207,7 @@ export default function TelegramBotInterface({
         );
       } else if (currentUser) {
         conversations = await chatStorage.getConversationsForUser(
-          currentUser.id, 
+          currentUser.id,
           currentUser.role,
           false
         );
@@ -215,7 +215,7 @@ export default function TelegramBotInterface({
         conversations = await chatStorage.getAllConversations(false);
       }
 
-      const validConversations = conversations.filter(conv => 
+      const validConversations = conversations.filter(conv =>
         conv.id && (conv.telegramChatIdentifier || conv.name !== 'Unknown Chat')
       );
 
@@ -230,8 +230,8 @@ export default function TelegramBotInterface({
       setChats(convertedChats);
 
       if (restrictToConversation && convertedChats.length > 0) {
-        const targetChat = convertedChats.find(chat => 
-          chat.id === restrictToConversation || 
+        const targetChat = convertedChats.find(chat =>
+          chat.id === restrictToConversation ||
           conversations.find(c => c.id === restrictToConversation)?.telegramChatIdentifier === chat.id
         );
         if (targetChat) {
@@ -246,7 +246,7 @@ export default function TelegramBotInterface({
 
   const initializeBot = async () => {
     if (!botService) return;
-    
+
     setIsConnecting(true);
     setError(null);
 
@@ -265,15 +265,15 @@ export default function TelegramBotInterface({
             messageType: message.messageType || 'text',
             attachments: message.attachments
           };
-          
+
           setMessages(prev => {
             const updated = [...prev, convertedMessage];
             return updated.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
           });
-          
+
           loadConversationsFromSupabase();
           playNotificationSound();
-          
+
           if (onNotification) {
             onNotification({
               id: crypto.randomUUID(),
@@ -298,21 +298,21 @@ export default function TelegramBotInterface({
           setError(errorMsg);
         },
         onMessageStatusUpdate: (messageId, status) => {
-          setMessages(prev => prev.map(msg => 
+          setMessages(prev => prev.map(msg =>
             msg.id === messageId ? { ...msg, status: status as any } : msg
           ));
         }
       });
-      
+
       setUnsubscribe(() => unsubscribeFn);
 
       const success = await botService.initialize();
-      
+
       if (success) {
         setIsConnected(true);
         setBotInfo(botService.getBotInfo());
         loadConversationsFromSupabase();
-        
+
         const info = botService.getBotInfo();
         if (info && info.username !== 'demo_bot') {
           addSystemMessage(`✅ Connected to bot: ${info.first_name} (@${info.username})`);
@@ -324,10 +324,10 @@ export default function TelegramBotInterface({
       } else {
         throw new Error('Failed to initialize bot service');
       }
-      
+
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Connection failed';
-      
+
       if (errorMessage.includes('browser due to CORS')) {
         addSystemMessage(`ℹ️ Browser mode: Loading conversations from database`, 'info');
         setBotInfo({ id: 0, first_name: 'Demo Bot', username: 'demo_bot' });
@@ -335,7 +335,7 @@ export default function TelegramBotInterface({
         loadConversationsFromSupabase();
         return;
       }
-      
+
       setError(errorMessage);
       addSystemMessage(`❌ Connection failed: ${errorMessage}`, 'error');
     } finally {
@@ -355,9 +355,9 @@ export default function TelegramBotInterface({
       isEdited: false,
       messageType: 'text'
     };
-    
+
     setMessages(prev => [...prev, systemMessage]);
-    
+
     setChats(prev => {
       const systemChatExists = prev.find(chat => chat.id === 'system');
       if (!systemChatExists) {
@@ -370,8 +370,8 @@ export default function TelegramBotInterface({
           status: 'online'
         }, ...prev];
       }
-      return prev.map(chat => 
-        chat.id === 'system' 
+      return prev.map(chat =>
+        chat.id === 'system'
           ? { ...chat, lastMessage: systemMessage, lastActivity: systemMessage.timestamp }
           : chat
       );
@@ -380,11 +380,11 @@ export default function TelegramBotInterface({
 
   const selectChat = async (chatId: string) => {
     setActiveChat(chatId);
-    
+
     if (botService && chatId !== 'system') {
       botService.markMessagesAsRead(chatId);
     }
-    
+
     if (chatId !== 'system') {
       try {
         const conversationUuid = await chatStorage.getOrCreateConversationUUID(
@@ -392,7 +392,7 @@ export default function TelegramBotInterface({
           'User',
           'Bot'
         );
-        
+
         const chatMessages = await chatStorage.getConversationHistory(
           conversationUuid,
           100,
@@ -401,7 +401,7 @@ export default function TelegramBotInterface({
           currentUser?.role,
           currentUser?.id
         );
-        
+
         const convertedMessages: Message[] = chatMessages.map(msg => ({
           id: msg.id,
           chatId: chatId,
@@ -414,7 +414,7 @@ export default function TelegramBotInterface({
           attachments: msg.attachments as FileAttachment[],
           messageType: msg.messageType as 'text' | 'file' | 'image' | 'document'
         }));
-        
+
         setMessages(prev => {
           const systemMessages = prev.filter(msg => msg.chatId === 'system');
           const allMessages = [...systemMessages, ...convertedMessages];
@@ -425,7 +425,7 @@ export default function TelegramBotInterface({
         addSystemMessage(`❌ Failed to load conversation history`, 'error');
       }
     }
-    
+
     loadConversationsFromSupabase();
   };
 
@@ -453,11 +453,11 @@ export default function TelegramBotInterface({
     if (!isTyping) {
       setIsTyping(true);
     }
-    
+
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
     }
-    
+
     typingTimeoutRef.current = setTimeout(() => {
       setIsTyping(false);
     }, 1000);
@@ -468,7 +468,7 @@ export default function TelegramBotInterface({
 
     try {
       setUploadingFiles(true);
-      
+
       let attachments: FileAttachment[] = [];
       if (selectedFiles.length > 0) {
         attachments = await uploadFiles(selectedFiles);
@@ -479,7 +479,7 @@ export default function TelegramBotInterface({
 
       if (botService && isConnected) {
         const success = await botService.sendMessage(activeChat, messageContent);
-        
+
         if (success) {
           if (selectedFiles.length > 0) {
             const messageWithFiles: Message = {
@@ -532,7 +532,7 @@ export default function TelegramBotInterface({
           return;
         }
       }
-      
+
       if (attachment.url) {
         const link = document.createElement('a');
         link.href = attachment.url;
@@ -558,24 +558,24 @@ export default function TelegramBotInterface({
   const confirmDeleteConversation = async () => {
     const chatId = conversationToDelete;
     if (!chatId || chatId === 'system') return;
-    
+
     try {
       setShowDeleteModal(false);
       setConversationToDelete(null);
       setDeletingConversation(chatId);
-      
+
       let conversationUuid: string | null = null;
-      
+
       const conversations = await chatStorage.getConversationsForUser(
         currentUser?.id || '',
         currentUser?.role || 'admin',
         false
       );
-      
-      const targetConversation = conversations.find(conv => 
+
+      const targetConversation = conversations.find(conv =>
         conv.telegramChatIdentifier === chatId || conv.id === chatId
       );
-      
+
       if (targetConversation) {
         conversationUuid = targetConversation.id;
       } else {
@@ -583,23 +583,23 @@ export default function TelegramBotInterface({
         addSystemMessage(`❌ Could not find conversation to delete`, 'error');
         return;
       }
-      
+
       await chatStorage.deleteConversation(conversationUuid, true);
-      
+
       if (botService) {
         await botService.reconnect();
       }
-      
+
       setChats(prev => prev.filter(chat => chat.id !== chatId));
-      
+
       if (activeChat === chatId) {
         setActiveChat(null);
         setMessages(prev => prev.filter(msg => msg.chatId === 'system'));
       }
-      
+
       addSystemMessage(`🗑️ Conversation deleted successfully`);
       await loadConversationsFromSupabase();
-      
+
     } catch (error) {
       console.error('Failed to delete conversation:', error);
       addSystemMessage(`❌ Failed to delete conversation: ${error}`, 'error');
@@ -614,9 +614,20 @@ export default function TelegramBotInterface({
   };
 
   const getActiveChatMessages = () => {
-    if (!activeChat) return [];
-    return messages.filter(msg => msg.chatId === activeChat);
-  };
+  if (!activeChat) return [];
+  const chatMessages = messages.filter(msg => msg.chatId === activeChat);
+
+  // Удаляем дубликаты по ID
+  const uniqueMessages = chatMessages.reduce((acc, current) => {
+    const exists = acc.find(item => item.id === current.id);
+    if (!exists) {
+      acc.push(current);
+    }
+    return acc;
+  }, [] as Message[]);
+
+  return uniqueMessages.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+};
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -642,16 +653,16 @@ export default function TelegramBotInterface({
   };
 
   const formatTime = (timestamp: Date) => {
-    return timestamp.toLocaleTimeString([], { 
-      hour: '2-digit', 
-      minute: '2-digit' 
+    return timestamp.toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit'
     });
   };
 
   const formatDate = (timestamp: Date) => {
     const today = new Date();
     const messageDate = new Date(timestamp);
-    
+
     if (messageDate.toDateString() === today.toDateString()) {
       return formatTime(timestamp);
     } else {
@@ -680,9 +691,9 @@ export default function TelegramBotInterface({
       await initializeBot();
       return;
     }
-    
+
     addSystemMessage(`🔄 Refreshing...`);
-    
+
     if (botService) {
       const success = await botService.reconnect();
       if (success) {
@@ -840,7 +851,7 @@ export default function TelegramBotInterface({
                         </div>
                       )}
                     </div>
-                    
+
                     {/* Chat Info */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between mb-1">
@@ -856,7 +867,7 @@ export default function TelegramBotInterface({
                           </span>
                         </div>
                       </div>
-                      
+
                       {chat.lastMessage && (
                         <div className="flex items-center space-x-1">
                           {chat.isTyping ? (
@@ -885,7 +896,7 @@ export default function TelegramBotInterface({
                       )}
                     </div>
                   </div>
-                  
+
                   {/* Delete Button */}
                   {chat.id !== 'system' && currentUser?.role === 'admin' && (
                     <button
@@ -934,12 +945,12 @@ export default function TelegramBotInterface({
                       <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-green-400 border-2 border-white rounded-full"></div>
                     )}
                   </div>
-                  
+
                   {/* Chat Info */}
                   <div>
                     <h3 className="font-semibold text-gray-900">
                       {activeChat === 'system'
-                        ? 'System Messages' 
+                        ? 'System Messages'
                         : getActiveChat()?.name || 'Unknown Chat'
                       }
                     </h3>
@@ -959,7 +970,7 @@ export default function TelegramBotInterface({
                     </div>
                   </div>
                 </div>
-                
+
                 {/* Chat Actions */}
                 <div className="flex items-center space-x-2">
                   <button
@@ -989,9 +1000,9 @@ export default function TelegramBotInterface({
 
             {/* Messages Area */}
             <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
-              {getActiveChatMessages().map((message) => (
+              {getActiveChatMessages().map((message, index) => (
                 <div
-                  key={message.id}
+                  key={`${message.chatId}-${message.id}-${index}`}
                   className={`flex ${message.direction === 'outgoing' ? 'justify-end' : 'justify-start'}`}
                 >
                   <div className={`max-w-xs lg:max-w-md ${message.direction === 'outgoing' ? 'order-2' : ''}`}>
@@ -1003,7 +1014,7 @@ export default function TelegramBotInterface({
                         )}
                       </div>
                     )}
-                    
+
                     <div className={`px-4 py-3 rounded-2xl shadow-sm ${
                       message.direction === 'outgoing'
                         ? 'bg-gradient-to-r from-blue-500 to-blue-600 text-white'
@@ -1014,13 +1025,13 @@ export default function TelegramBotInterface({
                         : 'bg-white text-gray-900 border border-gray-200'
                     }`}>
                       <div className="text-sm whitespace-pre-wrap">{message.content}</div>
-                      
+
                       {/* File Attachments */}
                       {message.attachments && message.attachments.length > 0 && (
                         <div className="mt-2 space-y-2">
-                          {message.attachments.map((attachment) => (
+                          {message.attachments.map((attachment, attachIndex) => (
                             <div
-                              key={attachment.id}
+                              key={`${message.id}-attachment-${attachment.id}-${attachIndex}`}
                               className={`flex items-center space-x-2 p-3 rounded-lg ${
                                 message.direction === 'outgoing'
                                   ? 'bg-blue-400 bg-opacity-30'
@@ -1053,7 +1064,7 @@ export default function TelegramBotInterface({
                           ))}
                         </div>
                       )}
-                      
+
                       <div className={`flex items-center justify-between mt-2 text-xs ${
                         message.direction === 'outgoing' ? 'text-blue-200' : 
                         message.senderName === 'System Error' ? 'text-red-600' :
@@ -1133,7 +1144,7 @@ export default function TelegramBotInterface({
                       😊
                     </button>
                   </div>
-                  
+
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -1142,7 +1153,7 @@ export default function TelegramBotInterface({
                     className="hidden"
                     accept="*/*"
                   />
-                  
+
                   <button
                     onClick={() => fileInputRef.current?.click()}
                     disabled={!isConnected && botInfo?.username !== 'demo_bot'}
@@ -1151,7 +1162,7 @@ export default function TelegramBotInterface({
                   >
                     <Paperclip className="h-5 w-5" />
                   </button>
-                  
+
                   <button
                     onClick={sendMessage}
                     disabled={(!newMessage.trim() && selectedFiles.length === 0) || uploadingFiles || (!isConnected && botInfo?.username !== 'demo_bot')}
@@ -1164,11 +1175,11 @@ export default function TelegramBotInterface({
                     )}
                   </button>
                 </div>
-                
+
                 <div className="flex items-center justify-between mt-2 text-xs text-gray-500">
                   <span>
-                    {isConnected || botInfo?.username === 'demo_bot' ? 
-                      'Press Enter to send, Shift+Enter for new line' : 
+                    {isConnected || botInfo?.username === 'demo_bot' ?
+                      'Press Enter to send, Shift+Enter for new line' :
                       'Connect to start messaging'
                     }
                   </span>
@@ -1188,14 +1199,14 @@ export default function TelegramBotInterface({
               </div>
               <h3 className="text-xl font-semibold text-gray-900 mb-2">Welcome to Telegram Bot</h3>
               <p className="text-gray-600 mb-6 max-w-md">
-                {botInfo?.username === 'demo_bot' ? 
+                {botInfo?.username === 'demo_bot' ?
                   'Running in browser mode - conversations loaded from database' :
-                  isConnected 
+                  isConnected
                   ? 'Your bot is ready to receive messages. Select a conversation to start chatting.'
                   : 'Connect your bot to start receiving messages from Telegram'
                 }
               </p>
-              
+
               {isConnected && botInfo && (
                 <div className="bg-white border border-gray-200 rounded-xl p-6 max-w-md mx-auto">
                   <h4 className="font-semibold text-gray-900 mb-3">Bot Information</h4>
@@ -1238,13 +1249,13 @@ export default function TelegramBotInterface({
               'bg-red-500'
             }`}></div>
             <span className="text-sm text-gray-700 font-medium">
-              {isConnecting ? 'Connecting to Telegram...' : 
+              {isConnecting ? 'Connecting to Telegram...' :
                isConnected ? 'Connected to Telegram API' :
                botInfo?.username === 'demo_bot' ? 'Browser Mode - Database Storage' :
                'Disconnected from Telegram'}
             </span>
           </div>
-          
+
           <div className="flex items-center space-x-6 text-xs text-gray-500">
             {botInfo && (
               <span>Bot: @{botInfo.username}</span>
@@ -1278,18 +1289,18 @@ export default function TelegramBotInterface({
               </div>
               <h3 className="text-lg font-semibold text-gray-900">Delete Conversation</h3>
             </div>
-            
+
             <p className="text-gray-600 mb-4">
               Are you sure you want to delete this conversation? This action cannot be undone.
             </p>
-            
+
             <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-6">
               <p className="text-sm text-red-800">
-                <strong>Warning:</strong> All messages and files in this conversation will be permanently 
+                <strong>Warning:</strong> All messages and files in this conversation will be permanently
                 deleted from the database. The client will lose access to the conversation history.
               </p>
             </div>
-            
+
             <div className="flex justify-end space-x-3">
               <button
                 onClick={cancelDeleteConversation}

@@ -16,7 +16,6 @@ import {
 } from 'lucide-react';
 import CaseManagement from './CaseManagement';
 import Analytics from './Analytics';
-import NotificationCenter from './NotificationCenter';
 import UserManagement from './UserManagement';
 import CaseAssignment from './CaseAssignment';
 import LawyerCaseView from './LawyerCaseView';

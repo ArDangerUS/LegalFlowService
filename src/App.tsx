@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import LoadingScreen from './components/layout/LoadingScreen';
 import OfflineIndicator from './components/common/OfflineIndicator';
@@ -7,6 +8,7 @@ import Login from './components/auth/Login';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import LegalDashboard from './components/legal/LegalDashboard';
 import TelegramBotInterface from './components/TelegramBotInterface';
+import { InvitationAcceptance } from './pages/InvitationAcceptance';
 import { useAuth } from './hooks/useAuth';
 import { useDatabase } from './hooks/useDatabase';
 import { useNotifications } from './hooks/useNotifications';
@@ -15,10 +17,10 @@ import { offlineService } from './services/OfflineService';
 import { Shield, AlertTriangle } from 'lucide-react';
 
 function App() {
-  const { 
-    user: currentUser, 
-    loading: authLoading, 
-    error: authError, 
+  const {
+    user: currentUser,
+    loading: authLoading,
+    error: authError,
     session,
     hasUsers,
     signIn,
@@ -27,20 +29,20 @@ function App() {
     initializeUser,
     clearError
   } = useAuth();
-  
-  const { 
-    isConnected, 
-    isConfigured, 
-    loading: dbLoading, 
-    error: dbError, 
-    retry: retryConnection 
+
+  const {
+    isConnected,
+    isConfigured,
+    loading: dbLoading,
+    error: dbError,
+    retry: retryConnection
   } = useDatabase();
-  
-  const { 
-    notifications, 
-    addNotification, 
-    markAsRead, 
-    clearAll 
+
+  const {
+    notifications,
+    addNotification,
+    markAsRead,
+    clearAll
   } = useNotifications();
 
   const botToken = "7902383724:AAGosG9WLCEuBdXeZhKHP7Qj-P0gjkiWn30";
@@ -108,16 +110,26 @@ function App() {
     );
   }
 
-  // Show login screen if no authenticated user
+  // Show login screen if no authenticated user - теперь через Router
   if (!currentUser && !authLoading) {
     return (
       <ErrorBoundary>
-        <Login 
-          onLogin={handleLogin}
-          onRegister={handleRegister}
-          loading={authLoading}
-          error={authError}
-        />
+        <Router>
+          <Routes>
+            {/* Роут для приглашений доступен без авторизации */}
+            <Route path="/invite/:token" element={<InvitationAcceptance />} />
+
+            {/* Все остальные роуты ведут на страницу логина */}
+            <Route path="*" element={
+              <Login
+                onLogin={handleLogin}
+                onRegister={handleRegister}
+                loading={authLoading}
+                error={authError}
+              />
+            } />
+          </Routes>
+        </Router>
       </ErrorBoundary>
     );
   }
@@ -151,37 +163,93 @@ function App() {
     );
   }
 
+  // Основное приложение с роутами
   return (
     <ErrorBoundary>
-      <OfflineIndicator onRetry={handleRetryConnection} />
-      <ProtectedRoute>
-        <AppLayout 
-          currentUser={currentUser!}
-          onLogout={handleLogout}
-          isConnected={isConnected}
-          isConfigured={isConfigured}
-          onRetryConnection={handleRetryConnection}
-        >
-          {/* Hidden Telegram Bot Instance - runs globally in background */}
-          <div className="hidden">
-            <TelegramBotInterface 
-              botToken={botToken} 
-              onNotification={handleTelegramNotification}
-              runInBackground={true}
-            />
-          </div>
-          
-          <LegalDashboard 
-            currentUser={currentUser!} 
-            botToken={botToken}
-            isConnected={isConnected}
-            isConfigured={isConfigured}
-            telegramNotifications={notifications}
-            onTelegramNotificationRead={markAsRead}
-            onClearTelegramNotifications={clearAll}
+      <Router>
+        <OfflineIndicator onRetry={handleRetryConnection} />
+
+        <Routes>
+          {/* РОУТ ДЛЯ ПРИГЛАШЕНИЙ - доступен без авторизации */}
+          <Route path="/invite/:token" element={<InvitationAcceptance />} />
+
+          {/* Роут для логина */}
+          <Route
+            path="/login"
+            element={
+              currentUser ? (
+                <Navigate to="/dashboard" replace />
+              ) : (
+                <Login
+                  onLogin={handleLogin}
+                  onRegister={handleRegister}
+                  loading={authLoading}
+                  error={authError}
+                />
+              )
+            }
           />
-        </AppLayout>
-      </ProtectedRoute>
+
+          {/* Защищенные роуты */}
+          <Route
+            path="/dashboard/*"
+            element={
+              <ProtectedRoute>
+                <AppLayout
+                  currentUser={currentUser!}
+                  onLogout={handleLogout}
+                  isConnected={isConnected}
+                  isConfigured={isConfigured}
+                  onRetryConnection={handleRetryConnection}
+                >
+                  {/* Hidden Telegram Bot Instance - runs globally in background */}
+                  <div className="hidden">
+                    <TelegramBotInterface
+                      botToken={botToken}
+                      onNotification={handleTelegramNotification}
+                      runInBackground={true}
+                    />
+                  </div>
+
+                  <LegalDashboard
+                    currentUser={currentUser!}
+                    botToken={botToken}
+                    isConnected={isConnected}
+                    isConfigured={isConfigured}
+                    telegramNotifications={notifications}
+                    onTelegramNotificationRead={markAsRead}
+                    onClearTelegramNotifications={clearAll}
+                  />
+                </AppLayout>
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Главная страница - редирект */}
+          <Route
+            path="/"
+            element={
+              currentUser ? (
+                <Navigate to="/dashboard" replace />
+              ) : (
+                <Navigate to="/login" replace />
+              )
+            }
+          />
+
+          {/* Остальные пути - редирект */}
+          <Route
+            path="*"
+            element={
+              currentUser ? (
+                <Navigate to="/dashboard" replace />
+              ) : (
+                <Navigate to="/login" replace />
+              )
+            }
+          />
+        </Routes>
+      </Router>
     </ErrorBoundary>
   );
 }

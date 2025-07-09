@@ -1,42 +1,34 @@
+// src/hooks/useAuth.ts - Обновленный хук для работы с AuthService
+
 import { useState, useEffect } from 'react';
 import { authService, type AuthState } from '../services/AuthService';
-import type { User } from '../types/legal';
 
 export function useAuth() {
-  const [authState, setAuthState] = useState<AuthState>(() => authService.getCurrentState());
+  const [authState, setAuthState] = useState<AuthState>(() => 
+    authService.getCurrentState()
+  );
 
   useEffect(() => {
-    // Initialize auth state
-    const initializeAuth = async () => {
-      // Set up auth state change listener
-      const unsubscribe = authService.setCallbacks({
-        onAuthStateChange: (state) => {
-          setAuthState(state);
-        },
-        onError: (error) => {
-          console.error('Auth error:', error);
-        }
-      });
-
-      // Initialize authentication
-      await authService.initialize();
-      
-      return unsubscribe;
-    };
-
-    let unsubscribe: (() => void) | null = null;
-    
-    initializeAuth().then((unsub) => {
-      unsubscribe = unsub;
+    // Устанавливаем слушатель изменений состояния
+    const unsubscribe = authService.setCallbacks({
+      onAuthStateChange: (state) => {
+        setAuthState(state);
+      },
+      onError: (error) => {
+        console.error('Auth error:', error);
+      }
     });
 
-    return () => {
-      if (unsubscribe) {
-        unsubscribe();
-      }
-    };
+    // Инициализируем сервис авторизации
+    authService.initialize().catch(error => {
+      console.error('Failed to initialize auth service:', error);
+    });
+
+    // Возвращаем функцию для очистки подписки
+    return unsubscribe;
   }, []);
 
+  // Методы для работы с авторизацией
   const signIn = async (email: string, password: string): Promise<void> => {
     await authService.signIn(email, password);
   };
@@ -53,25 +45,30 @@ export function useAuth() {
     authService.clearError();
   };
 
-  const initializeUser = async (): Promise<void> => {
+  const reinitialize = async (): Promise<void> => {
     await authService.initialize();
   };
 
   return {
+    // Состояние
     user: authState.user,
     session: authState.session,
     loading: authState.loading,
     error: authState.error,
     hasUsers: authState.hasUsers,
+    
+    // Методы авторизации
     signIn,
     signOut,
     signUpFirstUser,
     clearError,
-    initializeUser,
-    // Role checking utilities
+    reinitialize,
+    
+    // Методы проверки ролей (для экземпляра)
     hasRole: authService.hasRole.bind(authService),
     hasAnyRole: authService.hasAnyRole.bind(authService),
     isAdmin: authService.isAdmin.bind(authService),
+    isOfficeAdmin: authService.isOfficeAdmin.bind(authService),
     isLawyer: authService.isLawyer.bind(authService),
     isClient: authService.isClient.bind(authService)
   };
