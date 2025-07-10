@@ -104,16 +104,39 @@ export default function OfficeManagement() {
   };
 
   const handleDeleteOffice = async (officeId: string) => {
-    if (!confirm('Вы уверены, что хотите удалить этот офис? Все пользователи будут отвязаны от офиса.')) {
-      return;
-    }
+  // Находим офис для отображения названия в подтверждении
+  const office = offices.find(o => o.id === officeId);
+  const officeName = office ? office.name : 'офис';
 
-    try {
-      await caseService.deleteOffice(officeId);
-      await loadData();
-    } catch (error) {
-      console.error('Failed to delete office:', error);
-    }
+  if (!confirm(`Вы уверены, что хотите удалить ${officeName}? Все пользователи будут отвязаны от офиса. Это действие нельзя отменить.`)) {
+    return;
+  }
+
+  try {
+    console.log('🗑️ Deleting office:', officeId);
+
+    // Показываем индикатор загрузки
+    setLoading(true);
+
+    await caseService.deleteOffice(officeId);
+
+    console.log('✅ Office deleted successfully');
+
+    // Перезагружаем данные
+    await loadData();
+
+    // Показываем успешное сообщение
+    alert(`Офис "${officeName}" успешно удален.`);
+
+  } catch (error) {
+    console.error('❌ Failed to delete office:', error);
+
+    // Показываем детальную ошибку пользователю
+    const errorMessage = error instanceof Error ? error.message : 'Неизвестная ошибка';
+    alert(`Ошибка при удалении офиса: ${errorMessage}`);
+  } finally {
+    setLoading(false);
+  }
   };
 
   const openEditModal = (office: Office) => {

@@ -289,6 +289,290 @@ app.post('/api/offices', verifyAuth, async (req, res) => {
   }
 });
 
+// DELETE офис - ИСПРАВЛЕННАЯ ВЕРСИЯ
+app.delete('/api/offices/:id', verifyAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log('🗑️ DELETE /api/offices/:id called with id:', id);
+    console.log('📋 User info:', {
+      id: req.user?.id,
+      role: req.user?.role,
+      email: req.user?.email
+    });
+
+    // Проверяем права доступа - только админы могут удалять офисы
+    if (req.user?.role !== 'admin') {
+      console.log('❌ Access denied: user role is', req.user?.role);
+      return res.status(403).json({
+        error: 'Access denied',
+        message: 'Only administrators can delete offices'
+      });
+    }
+
+    // Проверяем, что ID валидный
+    if (!id || id.length < 10) {
+      console.log('❌ Invalid office ID:', id);
+      return res.status(400).json({
+        error: 'Invalid office ID'
+      });
+    }
+
+    // Проверяем, существует ли офис
+    console.log('🔍 Checking if office exists...');
+    const { data: existingOffice, error: checkError } = await supabase
+      .from('offices')
+      .select('id, name')
+      .eq('id', id)
+      .single();
+
+    if (checkError) {
+      console.log('❌ Error checking office existence:', checkError);
+      if (checkError.code === 'PGRST116') {
+        return res.status(404).json({
+          error: 'Office not found',
+          message: `Office with ID ${id} does not exist`
+        });
+      }
+      return res.status(500).json({
+        error: 'Database error',
+        details: checkError.message
+      });
+    }
+
+    if (!existingOffice) {
+      console.log('❌ Office not found in database:', id);
+      return res.status(404).json({
+        error: 'Office not found'
+      });
+    }
+
+    console.log('✅ Found office to delete:', existingOffice.name);
+
+    // Транзакция для безопасного удаления
+    console.log('🔄 Starting deletion transaction...');
+
+    // Шаг 1: Отвязываем всех пользователей от офиса
+    console.log('👥 Step 1: Unbinding users from office...');
+    const { error: unbindUsersError, count: unbindUsersCount } = await supabase
+      .from('users')
+      .update({ office_id: null })
+      .eq('office_id', id)
+      .select('id', { count: 'exact', head: true });
+
+    if (unbindUsersError) {
+      console.error('❌ Error unbinding users:', unbindUsersError);
+      return res.status(500).json({
+        error: 'Failed to unbind users from office',
+        details: unbindUsersError.message
+      });
+    }
+
+    console.log(`✅ Unbound ${unbindUsersCount || 0} users from office`);
+
+    // Шаг 2: Удаляем компании, связанные с офисом
+    console.log('🏢 Step 2: Deleting companies associated with office...');
+    const { error: deleteCompaniesError, count: deleteCompaniesCount } = await supabase
+      .from('companies')
+      .delete()
+      .eq('office_id', id)
+      .select('id', { count: 'exact', head: true });
+
+    if (deleteCompaniesError) {
+      console.error('❌ Error deleting companies:', deleteCompaniesError);
+      return res.status(500).json({
+        error: 'Failed to delete companies associated with office',
+        details: deleteCompaniesError.message
+      });
+    }
+
+    console.log(`✅ Deleted ${deleteCompaniesCount || 0} companies from office`);
+
+    // Шаг 3: Отвязываем дела от офиса (если есть)
+    console.log('📋 Step 3: Unbinding cases from office...');
+    const { error: unbindCasesError, count: unbindCasesCount } = await supabase
+      .from('cases')
+      .update({ office_id: null })
+      .eq('office_id', id)
+      .select('id', { count: 'exact', head: true });
+
+    if (unbindCasesError) {
+      console.error('⚠️ Warning: Error unbinding cases:', unbindCasesError);
+      // Не останавливаемся на этой ошибке, так как таблица может не существовать
+    } else {
+      console.log(`✅ Unbound ${unbindCasesCount || 0} cases from office`);
+    }
+
+    // Шаг 4: Отвязываем сообщения от офиса (если есть)
+    console.log('💬 Step 4: Unbinding messages from office...');
+    const { error: unbindMessagesError, count: unbindMessagesCount } = await supabase
+      .from('telegram_messages')
+      .update({ office_id: null })
+      .eq('office_id', id)
+      .select('id', { count: 'exact', head: true });
+
+    if (unbindMessagesError) {
+      console.error('⚠️ Warning: Error unbinding messages:', unbindMessagesError);
+      // Не останавливаемся на этой ошибке
+    } else {
+      console.log(`✅ Unbound ${unbindMessagesCount || 0} messages from office`);
+    }
+
+    // Шаг 5: Удаляем приглашения для этого офиса
+    console.log('📧 Step 5: Deleting invitations for office...');
+    const { error: deleteInvitationsError, count: deleteInvitationsCount } = await supabase
+      .from('invitations')
+      .delete()
+      .eq('office_id', id)
+      .select('id', { count: 'exact', head: true });
+
+    if (deleteInvitationsError) {
+      console.error('⚠️ Warning: Error deleting invitations:', deleteInvitationsError);
+      // Не останавливаемся на этой ошибке, так как таблица может не существовать
+    } else {
+      console.log(`✅ Deleted ${deleteInvitationsCount || 0} invitations`);
+    }
+
+    // Шаг 6: Удаляем сам офис
+    console.log('🏢 Step 6: Deleting office...');
+
+    // Шаг 6: Удаляем сам офис
+    console.log('🏢 Step 6: Deleting office...');
+    const { error: deleteError, count: deleteCount } = await supabase
+      .from('offices')
+      .delete()
+      .eq('id', id)
+      .select('id', { count: 'exact', head: true });
+
+    if (deleteError) {
+      console.error('❌ Error deleting office:', deleteError);
+      return res.status(500).json({
+        error: 'Failed to delete office',
+        details: deleteError.message
+      });
+    }
+
+
+    console.log('✅ Office deleted successfully:', existingOffice.name);
+
+    // Возвращаем успешный ответ
+    res.status(200).json({
+      success: true,
+      message: 'Office and associated data deleted successfully',
+      deletedOffice: {
+        id: id,
+        name: existingOffice.name
+      },
+      stats: {
+        unboundUsers: unbindUsersCount || 0,
+        deletedCompanies: deleteCompaniesCount || 0,
+        unboundCases: unbindCasesCount || 0,
+        unboundMessages: unbindMessagesCount || 0,
+        deletedInvitations: deleteInvitationsCount || 0
+      }
+    });
+
+  } catch (error) {
+    console.error('💥 Unexpected error in DELETE /api/offices/:id:', error);
+    res.status(500).json({
+      error: 'Internal server error',
+      message: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+
+// === ТАКЖЕ ДОБАВИМ GET для отладки ===
+app.get('/api/offices/:id', verifyAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log('🔍 GET /api/offices/:id called with id:', id);
+
+    const { data: office, error } = await supabase
+      .from('offices')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return res.status(404).json({ error: 'Office not found' });
+      }
+      return res.status(500).json({ error: error.message });
+    }
+
+    res.json(office);
+  } catch (error) {
+    console.error('Error getting office:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// PUT (обновить) офис
+app.put('/api/offices/:id', verifyAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, address, city, phone, email } = req.body;
+
+    console.log('📝 Updating office:', id);
+    console.log('User role:', req.user?.role);
+
+    // Проверяем права доступа
+    if (req.user?.role !== 'admin') {
+      return res.status(403).json({
+        error: 'Access denied',
+        message: 'Only administrators can update offices'
+      });
+    }
+
+    // Валидация обязательных полей
+    if (!name?.trim() || !city?.trim()) {
+      return res.status(400).json({
+        error: 'Validation error',
+        message: 'Name and city are required'
+      });
+    }
+
+    // Обновляем офис
+    const { data: updatedOffice, error } = await supabase
+      .from('offices')
+      .update({
+        name: name.trim(),
+        address: address?.trim() || null,
+        city: city.trim(),
+        phone: phone?.trim() || null,
+        email: email?.trim() || null,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Update office error:', error);
+      return res.status(500).json({
+        error: 'Failed to update office',
+        details: error.message
+      });
+    }
+
+    if (!updatedOffice) {
+      return res.status(404).json({
+        error: 'Office not found'
+      });
+    }
+
+    console.log('✅ Office updated successfully');
+    res.json(updatedOffice);
+
+  } catch (error) {
+    console.error('Update office error:', error);
+    res.status(500).json({
+      error: 'Internal server error',
+      details: error.message
+    });
+  }
+});
+
 // API маршруты для приглашений
 app.post('/api/invitations', verifyAuth, async (req, res) => {
   try {
