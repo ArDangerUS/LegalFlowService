@@ -198,6 +198,27 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Добавить после существующих API роутов (например, после /api/health)
+app.get('/api/external/httpbin-status', async (req, res) => {
+  try {
+    const response = await fetch('https://httpbin.org/status/200');
+    const status = response.status;
+    const statusText = response.statusText;
+
+    res.json({
+      status,
+      statusText,
+      success: response.ok,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: error.message,
+      success: false
+    });
+  }
+});
+
 // API маршруты для офисов
 app.get('/api/offices', verifyAuth, async (req, res) => {
   try {
