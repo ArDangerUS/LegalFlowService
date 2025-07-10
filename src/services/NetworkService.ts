@@ -54,12 +54,23 @@ export class NetworkService {
     }
 
     try {
-      const testUrl = url || 'https://httpbin.org/status/200';
+      // Используем локальный API вместо внешнего сервиса
+      let testUrl = url;
+
+      if (!testUrl) {
+        // Определяем базовый URL в зависимости от среды
+        const baseUrl = window.location.port === '5173' || window.location.port === '3001'
+          ? 'http://localhost:3000'
+          : '';
+
+        testUrl = `${baseUrl}/api/health`;
+      }
+
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
 
       const response = await fetch(testUrl, {
-        method: 'HEAD',
+        method: 'GET', // Изменено с HEAD на GET для лучшей совместимости
         signal: controller.signal,
         cache: 'no-cache'
       });
@@ -67,6 +78,7 @@ export class NetworkService {
       clearTimeout(timeoutId);
       return response.ok;
     } catch (error) {
+      console.warn('Connectivity test failed:', error);
       return false;
     }
   }
