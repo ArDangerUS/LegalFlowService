@@ -100,7 +100,28 @@ app.get('/setup-webhook', async (req, res) => {
   }
 
   try {
-    const webhookUrl = `${req.protocol}://${req.get('host')}/webhook`;
+    // Определяем URL более надежно
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+    const host = req.headers['x-forwarded-host'] || req.headers.host;
+    const webhookUrl = `${protocol}://${host}/webhook`;
+
+    console.log('🔧 Setting webhook with URL:', webhookUrl);
+    console.log('📋 Request headers:', {
+      'x-forwarded-proto': req.headers['x-forwarded-proto'],
+      'x-forwarded-host': req.headers['x-forwarded-host'],
+      'host': req.headers.host,
+      'protocol': req.protocol
+    });
+
+    // Проверяем, что URL начинается с https
+    if (!webhookUrl.startsWith('https://')) {
+      return res.status(400).json({
+        success: false,
+        error: 'Webhook URL must use HTTPS',
+        generated_url: webhookUrl,
+        suggestion: 'This endpoint should be called from Heroku (HTTPS), not localhost'
+      });
+    }
 
     const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook`, {
       method: 'POST',
@@ -114,6 +135,7 @@ app.get('/setup-webhook', async (req, res) => {
     const data = await response.json();
 
     if (data.ok) {
+      console.log('✅ Webhook set successfully:', webhookUrl);
       res.json({
         success: true,
         webhook_url: webhookUrl,
@@ -121,11 +143,63 @@ app.get('/setup-webhook', async (req, res) => {
         telegram_response: data
       });
     } else {
+      console.error('❌ Telegram webhook error:', data);
       res.status(400).json({
         success: false,
-        error: data.description
+        error: data.description,
+        telegram_response: data,
+        attempted_url: webhookUrl
       });
     }
+  } catch (error) {
+    console.error('❌ Error setting webhook:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Добавьте также endpoint для проверки текущего webhook
+app.get('/webhook-info', async (req, res) => {
+  if (!TELEGRAM_BOT_TOKEN) {
+    return res.status(500).json({ error: 'TELEGRAM_BOT_TOKEN not set' });
+  }
+
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Также добавьте endpoint для удаления webhook (для отладки)
+app.get('/delete-webhook', async (req, res) => {
+  if (!TELEGRAM_BOT_TOKEN) {
+    return res.status(500).json({ error: 'TELEGRAM_BOT_TOKEN not set' });
+  }
+
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/deleteWebhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+
+    const data = await response.json();
+    res.json({
+      success: data.ok,
+      message: data.ok ? 'Webhook удален' : 'Ошибка удаления webhook',
+      telegram_response: data
+    });
   } catch (error) {
     res.status(500).json({
       success: false,
