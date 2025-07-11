@@ -73,6 +73,172 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
+
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+
+// Webhook endpoint для Telegram (ВАЖНО: до static files)
+app.post('/webhook', async (req, res) => {
+  try {
+    const update = req.body;
+    console.log('📨 Telegram webhook update:', JSON.stringify(update, null, 2));
+
+    if (update.message) {
+      await handleTelegramMessage(update.message);
+    }
+
+    res.status(200).send('OK');
+  } catch (error) {
+    console.error('❌ Webhook error:', error);
+    res.status(200).send('OK');
+  }
+});
+
+// Установка webhook (ВАЖНО: до static files)
+app.get('/setup-webhook', async (req, res) => {
+  if (!TELEGRAM_BOT_TOKEN) {
+    return res.status(500).json({ error: 'TELEGRAM_BOT_TOKEN not set' });
+  }
+
+  try {
+    const webhookUrl = `${req.protocol}://${req.get('host')}/webhook`;
+
+    const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: webhookUrl,
+        drop_pending_updates: true
+      })
+    });
+
+    const data = await response.json();
+
+    if (data.ok) {
+      res.json({
+        success: true,
+        webhook_url: webhookUrl,
+        message: 'Webhook установлен успешно!',
+        telegram_response: data
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        error: data.description
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Простая обработка сообщений
+async function handleTelegramMessage(message) {
+  const chatId = message.chat.id;
+  const text = message.text || '';
+  const senderName = message.from.first_name + (message.from.username ? ` (@${message.from.username})` : '');
+
+  console.log(`📨 Message from ${senderName}: ${text}`);
+
+  try {
+    // Получаем или создаем conversation
+    let conversationId;
+    const { data: existingConv } = await supabase
+      .from('conversations')
+      .select('id')
+      .eq('telegram_chat_identifier', chatId.toString())
+      .single();
+
+    if (existingConv) {
+      conversationId = existingConv.id;
+    } else {
+      const { data: newConv } = await supabase
+        .from('conversations')
+        .insert({
+          name: message.chat.first_name || `Chat ${chatId}`,
+          telegram_chat_identifier: chatId.toString()
+        })
+        .select('id')
+        .single();
+
+      conversationId = newConv.id;
+    }
+
+    // Сохраняем сообщение
+    await supabase
+      .from('messages')
+      .insert({
+        conversation_id: conversationId,
+        content: text,
+        sender_name: senderName,
+        message_type: 'received',
+        telegram_message_id: message.message_id
+      });
+
+    console.log('💾 Message saved to database');
+
+    // Автоответ
+    if (text.toLowerCase().includes('привет') || text.startsWith('/start')) {
+      await sendTelegramMessage(chatId, 'Привет! Спасибо за сообщение. Наша команда ответит вам в ближайшее время.');
+    } else {
+      await sendTelegramMessage(chatId, 'Спасибо за ваше сообщение! Мы рассмотрим его и ответим в ближайшее время.');
+    }
+
+  } catch (dbError) {
+    console.error('❌ Database error:', dbError);
+  }
+}
+
+// Отправка сообщения в Telegram
+async function sendTelegramMessage(chatId, text) {
+  if (!TELEGRAM_BOT_TOKEN) {
+    console.error('❌ TELEGRAM_BOT_TOKEN not set');
+    return;
+  }
+
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: text
+      })
+    });
+
+    const data = await response.json();
+
+    if (data.ok) {
+      console.log('✅ Auto-reply sent');
+
+      // Сохраняем отправленное сообщение
+      const { data: conversation } = await supabase
+        .from('conversations')
+        .select('id')
+        .eq('telegram_chat_identifier', chatId.toString())
+        .single();
+
+      if (conversation) {
+        await supabase
+          .from('messages')
+          .insert({
+            conversation_id: conversation.id,
+            content: text,
+            sender_name: 'LegalFlow Bot',
+            message_type: 'sent',
+            telegram_message_id: data.result.message_id
+          });
+      }
+    } else {
+      console.error('❌ Telegram API error:', data.description);
+    }
+  } catch (error) {
+    console.error('❌ Error sending message:', error);
+  }
+}
+
 // Middleware для проверки авторизации
 async function verifyAuth(req, res, next) {
   try {
@@ -1080,173 +1246,7 @@ app.get('*', (req, res, next) => {
   res.sendFile(join(__dirname, 'dist', 'index.html'));
 });
 
-// ДОБАВЬТЕ ЭТО В КОНЕЦ ВАШЕГО server.js (перед app.listen)
 
-// Telegram Webhook - простое решение
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-
-// Webhook endpoint для Telegram
-app.post('/webhook', async (req, res) => {
-  try {
-    const update = req.body;
-    console.log('📨 Telegram webhook update:', JSON.stringify(update, null, 2));
-
-    if (update.message) {
-      await handleTelegramMessage(update.message);
-    }
-
-    res.status(200).send('OK');
-  } catch (error) {
-    console.error('❌ Webhook error:', error);
-    res.status(200).send('OK'); // Всегда отвечаем OK, чтобы Telegram не повторял запросы
-  }
-});
-
-// Простая обработка сообщений
-async function handleTelegramMessage(message) {
-  const chatId = message.chat.id;
-  const text = message.text || '';
-  const senderName = message.from.first_name + (message.from.username ? ` (@${message.from.username})` : '');
-
-  console.log(`📨 Message from ${senderName}: ${text}`);
-
-  // Сохраняем сообщение в базу данных
-  try {
-    // Получаем или создаем conversation
-    let conversationId;
-    const { data: existingConv } = await supabase
-      .from('conversations')
-      .select('id')
-      .eq('telegram_chat_identifier', chatId.toString())
-      .single();
-
-    if (existingConv) {
-      conversationId = existingConv.id;
-    } else {
-      const { data: newConv } = await supabase
-        .from('conversations')
-        .insert({
-          name: message.chat.first_name || `Chat ${chatId}`,
-          telegram_chat_identifier: chatId.toString()
-        })
-        .select('id')
-        .single();
-
-      conversationId = newConv.id;
-    }
-
-    // Сохраняем сообщение
-    await supabase
-      .from('messages')
-      .insert({
-        conversation_id: conversationId,
-        content: text,
-        sender_name: senderName,
-        message_type: 'received',
-        telegram_message_id: message.message_id
-      });
-
-    console.log('💾 Message saved to database');
-
-    // Автоответ
-    if (text.toLowerCase().includes('привет') || text.startsWith('/start')) {
-      await sendTelegramMessage(chatId, 'Привет! Спасибо за сообщение. Наша команда ответит вам в ближайшее время.');
-    } else {
-      await sendTelegramMessage(chatId, 'Спасибо за ваше сообщение! Мы рассмотрим его и ответим в ближайшее время.');
-    }
-
-  } catch (dbError) {
-    console.error('❌ Database error:', dbError);
-  }
-}
-
-// Отправка сообщения в Telegram
-async function sendTelegramMessage(chatId, text) {
-  if (!TELEGRAM_BOT_TOKEN) {
-    console.error('❌ TELEGRAM_BOT_TOKEN not set');
-    return;
-  }
-
-  try {
-    const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: text
-      })
-    });
-
-    const data = await response.json();
-
-    if (data.ok) {
-      console.log('✅ Auto-reply sent');
-
-      // Сохраняем отправленное сообщение
-      const { data: conversation } = await supabase
-        .from('conversations')
-        .select('id')
-        .eq('telegram_chat_identifier', chatId.toString())
-        .single();
-
-      if (conversation) {
-        await supabase
-          .from('messages')
-          .insert({
-            conversation_id: conversation.id,
-            content: text,
-            sender_name: 'LegalFlow Bot',
-            message_type: 'sent',
-            telegram_message_id: data.result.message_id
-          });
-      }
-    } else {
-      console.error('❌ Telegram API error:', data.description);
-    }
-  } catch (error) {
-    console.error('❌ Error sending message:', error);
-  }
-}
-
-// Установка webhook (вызовите один раз после деплоя)
-app.get('/setup-webhook', async (req, res) => {
-  if (!TELEGRAM_BOT_TOKEN) {
-    return res.status(500).json({ error: 'TELEGRAM_BOT_TOKEN not set' });
-  }
-
-  try {
-    const webhookUrl = `${req.protocol}://${req.get('host')}/webhook`;
-
-    const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        url: webhookUrl,
-        drop_pending_updates: true
-      })
-    });
-
-    const data = await response.json();
-
-    if (data.ok) {
-      res.json({
-        success: true,
-        webhook_url: webhookUrl,
-        message: 'Webhook установлен успешно!'
-      });
-    } else {
-      res.status(400).json({
-        success: false,
-        error: data.description
-      });
-    }
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
 
 app.listen(port, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${port}`);
