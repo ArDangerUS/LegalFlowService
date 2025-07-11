@@ -318,6 +318,7 @@ export class LegalCaseService {
       .insert({
         name: officeData.name,
         address: officeData.address,
+        city: officeData.city,
         phone: officeData.phone,
         email: officeData.email
       })
@@ -850,6 +851,7 @@ export class LegalCaseService {
       id: row.id,
       name: row.name,
       address: row.address,
+      city: row.city,
       phone: row.phone,
       email: row.email,
       createdAt: new Date(row.created_at)
