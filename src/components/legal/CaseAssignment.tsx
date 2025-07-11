@@ -414,7 +414,7 @@ export default function CaseAssignment({ currentUser }: CaseAssignmentProps) {
       {/* Assignment Modal */}
       {(showAssignModal || showReassignModal) && selectedCase && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+          <div className="bg-white rounded-lg p-4 sm:p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
             <h3 className="text-lg font-medium text-gray-900 mb-4">
               {showReassignModal ? 'Reassign Case' : 'Assign Case to Lawyer'}
             </h3>
@@ -433,27 +433,29 @@ export default function CaseAssignment({ currentUser }: CaseAssignmentProps) {
             
             <div className="space-y-3 mb-6">
               <h4 className="text-sm font-medium text-gray-900">Select Lawyer:</h4>
-              {lawyers.map(lawyer => (
-                <button
-                  key={lawyer.id}
-                  onClick={() => handleAssignCase(lawyer.id)}
-                  disabled={assignmentLoading || (showReassignModal && lawyer.id === selectedCase.assignedLawyerId)}
-                  className="w-full text-left p-3 border border-gray-200 rounded-lg hover:bg-gray-50 focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="font-medium text-gray-900">{lawyer.name}</div>
-                      <div className="text-sm text-gray-500">{lawyer.email}</div>
-                      <div className="text-xs text-gray-400 capitalize">{lawyer.role}</div>
+3уу3              <div className="max-h-[40vh] overflow-y-auto pr-1">
+                {lawyers.map(lawyer => (
+                  <button
+                    key={lawyer.id}
+                    onClick={() => handleAssignCase(lawyer.id)}
+                    disabled={assignmentLoading || (showReassignModal && lawyer.id === selectedCase.assignedLawyerId)}
+                    className="w-full text-left p-3 border border-gray-200 rounded-lg hover:bg-gray-50 focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="font-medium text-gray-900">{lawyer.name}</div>
+                        <div className="text-sm text-gray-500">{lawyer.email}</div>
+                        <div className="text-xs text-gray-400 capitalize">{lawyer.role}</div>
+                      </div>
+                      {showReassignModal && lawyer.id === selectedCase.assignedLawyerId && (
+                        <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">
+                          Current
+                        </span>
+                      )}
                     </div>
-                    {showReassignModal && lawyer.id === selectedCase.assignedLawyerId && (
-                      <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">
-                        Current
-                      </span>
-                    )}
-                  </div>
-                </button>
-              ))}
+                  </button>
+                ))}
+              </div>
             </div>
             
             <div className="flex justify-end space-x-3">

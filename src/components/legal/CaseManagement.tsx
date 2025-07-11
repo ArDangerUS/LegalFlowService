@@ -437,23 +437,25 @@ export default function CaseManagement({ currentUser }: CaseManagementProps) {
       {/* Assign Case Modal */}
       {showAssignModal && selectedCase && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+          <div className="bg-white rounded-lg p-4 sm:p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
             <h3 className="text-lg font-medium text-gray-900 mb-4">{t('cases.assignCaseTitle')}</h3>
             <p className="text-sm text-gray-600 mb-4">
               {t('cases.assignCaseText')} "{selectedCase.clientName}":
             </p>
             
             <div className="space-y-3 mb-6">
-              {lawyers.map(lawyer => (
-                <button
-                  key={lawyer.id}
-                  onClick={() => handleAssignCase(lawyer.id)}
-                  className="w-full text-left p-3 border border-gray-200 rounded-lg hover:bg-gray-50 focus:ring-2 focus:ring-blue-500"
-                >
-                  <div className="font-medium text-gray-900">{lawyer.name}</div>
-                  <div className="text-sm text-gray-500">{lawyer.email}</div>
-                </button>
-              ))}
+              <div className="max-h-[40vh] overflow-y-auto pr-1">
+                {lawyers.map(lawyer => (
+                  <button
+                    key={lawyer.id}
+                    onClick={() => handleAssignCase(lawyer.id)}
+                    className="w-full text-left p-3 border border-gray-200 rounded-lg hover:bg-gray-50 focus:ring-2 focus:ring-blue-500"
+                  >
+                    <div className="font-medium text-gray-900">{lawyer.name}</div>
+                    <div className="text-sm text-gray-500">{lawyer.email}</div>
+                  </button>
+                ))}
+              </div>
             </div>
             
             <div className="flex justify-end space-x-3">

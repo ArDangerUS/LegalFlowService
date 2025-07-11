@@ -581,8 +581,9 @@ export default function TelegramBotInterface({
 
       await chatStorage.deleteConversation(conversationUuid, true);
 
+      // Clear local caches instead of reconnecting
       if (botService) {
-        await botService.reconnect();
+        botService.clearLocalCaches();
       }
 
       setChats(prev => prev.filter(chat => chat.id !== chatId));
@@ -816,9 +817,9 @@ export default function TelegramBotInterface({
             </div>
           ) : (
             <div className="divide-y divide-gray-100">
-              {filteredChats.map((chat) => (
+              {filteredChats.map((chat, chatIndex) => (
                 <div
-                  key={chat.id}
+                  key={`chat-${chat.id}-${chatIndex}`}
                   className={`group relative p-4 cursor-pointer hover:bg-gray-50 transition-all duration-200 ${
                     activeChat === chat.id ? 'bg-blue-50 border-r-3 border-blue-500' : ''
                   }`}
@@ -893,7 +894,7 @@ export default function TelegramBotInterface({
                   </div>
 
                   {/* Delete Button */}
-                  {chat.id !== 'system' && currentUser?.role === 'admin' && (
+                  {/* {chat.id !== 'system' && currentUser?.role === 'admin' && ( */}
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -909,7 +910,6 @@ export default function TelegramBotInterface({
                         <Trash2 className="h-4 w-4" />
                       )}
                     </button>
-                  )}
                 </div>
               ))}
             </div>
@@ -997,7 +997,7 @@ export default function TelegramBotInterface({
             <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50 min-h-[62px] max-h-[62vh]">
               {getActiveChatMessages().map((message, index) => (
                 <div
-                  key={`${message.chatId}-${message.id}-${index}`}
+                  key={`message-${message.chatId}-${message.id}-${index}`}
                   className={`flex ${message.direction === 'outgoing' ? 'justify-end' : 'justify-start'}`}
                 >
                   <div className={`max-w-xs lg:max-w-md ${message.direction === 'outgoing' ? 'order-2' : ''}`}>
@@ -1026,7 +1026,7 @@ export default function TelegramBotInterface({
                         <div className="mt-2 space-y-2">
                           {message.attachments.map((attachment, attachIndex) => (
                             <div
-                              key={`${message.id}-attachment-${attachment.id}-${attachIndex}`}
+                              key={`attachment-${message.id}-${attachment.id}-${attachIndex}`}
                               className={`flex items-center space-x-2 p-3 rounded-lg ${
                                 message.direction === 'outgoing'
                                   ? 'bg-blue-400 bg-opacity-30'
@@ -1098,7 +1098,7 @@ export default function TelegramBotInterface({
                     </div>
                     <div className="space-y-2">
                       {selectedFiles.map((file, index) => (
-                        <div key={index} className="flex items-center justify-between p-2 bg-white rounded border">
+                        <div key={`file-${index}`} className="flex items-center justify-between p-2 bg-white rounded border">
                           <div className="flex items-center space-x-2">
                             {getFileIcon(file.type)}
                             <div>
