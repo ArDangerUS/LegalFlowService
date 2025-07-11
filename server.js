@@ -568,20 +568,7 @@ app.delete('/api/offices/:id', verifyAuth, async (req, res) => {
       console.log(`✅ Unbound ${unbindCasesCount || 0} cases from office`);
     }
 
-    // Шаг 4: Отвязываем сообщения от офиса (если есть)
-    console.log('💬 Step 4: Unbinding messages from office...');
-    const { error: unbindMessagesError, count: unbindMessagesCount } = await supabase
-      .from('telegram_messages')
-      .update({ office_id: null })
-      .eq('office_id', id)
-      .select('id', { count: 'exact', head: true });
 
-    if (unbindMessagesError) {
-      console.error('⚠️ Warning: Error unbinding messages:', unbindMessagesError);
-      // Не останавливаемся на этой ошибке
-    } else {
-      console.log(`✅ Unbound ${unbindMessagesCount || 0} messages from office`);
-    }
 
     // Шаг 5: Удаляем приглашения для этого офиса
     console.log('📧 Step 5: Deleting invitations for office...');
@@ -632,7 +619,6 @@ app.delete('/api/offices/:id', verifyAuth, async (req, res) => {
         unboundUsers: unbindUsersCount || 0,
         deletedCompanies: deleteCompaniesCount || 0,
         unboundCases: unbindCasesCount || 0,
-        unboundMessages: unbindMessagesCount || 0,
         deletedInvitations: deleteInvitationsCount || 0
       }
     });
