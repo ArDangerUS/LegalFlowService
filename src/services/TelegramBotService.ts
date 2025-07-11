@@ -495,53 +495,54 @@ export class TelegramBotService {
   }
 
   private async handleRegionSelection(chatId: string, regionId: string): Promise<void> {
-    try {
-      // Update conversation metadata
-      const { data: existingConversation } = await this.chatStorage.supabase
+  try {
+    // Update conversation metadata
+    const { data: existingConversation } = await this.chatStorage.supabase
+        .from('conversations')
+        .select('id, metadata')
+        .eq('telegram_chat_identifier', chatId)
+        .single();
+
+    if (existingConversation) {
+      await this.chatStorage.supabase
           .from('conversations')
-          .select('id, metadata')
-          .eq('telegram_chat_identifier', chatId)
-          .single();
+          .update({
+            metadata: { ...existingConversation.metadata, regionId }
+          })
+          .eq('id', existingConversation.id);
+    } else {
 
-      if (existingConversation) {
-        await this.chatStorage.supabase
-            .from('conversations')
-            .update({
-              metadata: { ...existingConversation.metadata, regionId }
-            })
-            .eq('id', existingConversation.id);
-      } else {
-        
-        const conversation: Conversation = {
-          id: crypto.randomUUID(),
-          type: 'direct',
-          name: await this.getClientName(chatId),
-          createdAt: new Date(),
-          updatedAt: new Date(),
-          unreadCount: 0,
-          isArchived: false,
-          isMuted: false,
-          settings: {
-            retentionDays: 365,
-            autoBackup: true,
-            encryptionEnabled: false,
-            allowFileSharing: true,
-            maxFileSize: 50 * 1024 * 1024,
-            allowedFileTypes: ['image/*', 'application/pdf', 'text/*'],
-            supportedDocumentTypes: ['pdf', 'doc', 'docx', 'txt']
-          },
-          telegramChatIdentifier: chatId,
-          metadata: { companyId: null }
-        };
-        await this.chatStorage.storeConversation(conversation);
-      }
-
-      await this.showOfficesMenu(chatId, regionId);
-    } catch (error) {
-      console.error('❌ Error handling region selection:', error);
-      await this.sendMessage(chatId, 'Error selecting region. Please try again.');
+      const conversation: Conversation = {
+        id: crypto.randomUUID(),
+        type: 'direct',
+        name: await this.getClientName(chatId),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        unreadCount: 0,
+        isArchived: false,
+        isMuted: false,
+        settings: {
+          retentionDays: 365,
+          autoBackup: true,
+          encryptionEnabled: false,
+          allowFileSharing: true,
+          maxFileSize: 50 * 1024 * 1024,
+          allowedFileTypes: ['image/*', 'application/pdf', 'text/*'],
+          supportedDocumentTypes: ['pdf', 'doc', 'docx', 'txt']
+        },
+        telegramChatIdentifier: chatId,
+        metadata: { companyId: null, regionId } // ← ДОБАВИТЬ regionId ЗДЕСЬ!
+      };
+      await this.chatStorage.storeConversation(conversation);
     }
+
+    await this.showOfficesMenu(chatId, regionId);
+  } catch (error) {
+    console.error('❌ Error handling region selection:', error);
+    await this.sendMessage(chatId, 'Error selecting region. Please try again.');
   }
+}
+
 
   private async makeAPIRequest(method: string, params: any = {}, timeoutMs: number = 10000): Promise<any> {
     const url = `https://api.telegram.org/bot${this.botToken}/${method}`;
@@ -1069,76 +1070,84 @@ export class TelegramBotService {
     }
   }
 
-  private async selectOffice(userId: string, chatId: string, officeId: string): Promise<void> {
-    try {
-      const { data: conversation } = await this.chatStorage.supabase
-          .from('conversations')
-          .select('metadata')
-          .eq('telegram_chat_identifier', chatId)
-          .single();
+ private async selectOffice(userId: string, chatId: string, officeId: string): Promise<void> {
+  try {
+    const { data: conversation } = await this.chatStorage.supabase
+        .from('conversations')
+        .select('metadata')
+        .eq('telegram_chat_identifier', chatId)
+        .single();
 
-      const regionId = conversation && conversation.metadata ? conversation.metadata.regionId : 'f28b48e8-3bc7-4d7f-b6a1-ba7e81549256';
+    // ← ИСПРАВИТЬ ЛОГИКУ ПОЛУЧЕНИЯ regionId:
+    let regionId = 'f28b48e8-3bc7-4d7f-b6a1-ba7e81549256'; // fallback
 
-      const offices = await this.loadOfficesByRegion(regionId);
-      const office = offices.find(o => o.id === officeId);
-
-      if (!office || !office.companyId) {
-        await this.sendMessage(chatId, 'Office not found or no company associated. Please try again.');
-        return;
-      }
-      const companyId = office.companyId;
-
-      this.userOfficeMap.set(userId, officeId);
-      this.userCompanyMap.set(userId, companyId);
-
-      const { data: existingConversation } = await this.chatStorage.supabase
-          .from('conversations')
-          .select('id, metadata')
-          .eq('telegram_chat_identifier', chatId)
-          .single();
-
-      if (existingConversation && existingConversation.metadata) {
-        await this.chatStorage.supabase
-            .from('conversations')
-            .update({
-              metadata: {
-                ...existingConversation.metadata,
-                companyId,
-                officeId
-              }
-            })
-            .eq('id', existingConversation.id);
-      } else {
-        const conversation: Conversation = {
-          id: crypto.randomUUID(),
-          type: 'direct',
-          name: await this.getClientName(chatId),
-          createdAt: new Date(),
-          updatedAt: new Date(),
-          unreadCount: 0,
-          isArchived: false,
-          isMuted: false,
-          settings: {
-            retentionDays: 365,
-            autoBackup: true,
-            encryptionEnabled: false,
-            allowFileSharing: true,
-            maxFileSize: 50 * 1024 * 1024,
-            allowedFileTypes: ['image/*', 'application/pdf', 'text/*'],
-            supportedDocumentTypes: ['pdf', 'doc', 'docx', 'txt']
-          },
-          telegramChatIdentifier: chatId,
-          metadata: { companyId, officeId, regionId }
-        };
-        await this.chatStorage.storeConversation(conversation);
-      }
-
-      await this.sendMessage(chatId, `✅ You selected office: ${office.name} (${office.address})\n\nYou can now communicate with the associated company.`);
-    } catch (error) {
-      console.error('❌ Failed to select office:', error);
-      await this.sendMessage(chatId, 'Failed to select office. Please try again.');
+    if (conversation && conversation.metadata && conversation.metadata.regionId) {
+      regionId = conversation.metadata.regionId;
     }
+
+    console.log('🔍 Using regionId:', regionId); // для отладки
+
+    const offices = await this.loadOfficesByRegion(regionId);
+    const office = offices.find(o => o.id === officeId);
+
+    if (!office || !office.companyId) {
+      await this.sendMessage(chatId, 'Office not found or no company associated. Please try again.');
+      return;
+    }
+    const companyId = office.companyId;
+
+    this.userOfficeMap.set(userId, officeId);
+    this.userCompanyMap.set(userId, companyId);
+
+    const { data: existingConversation } = await this.chatStorage.supabase
+        .from('conversations')
+        .select('id, metadata')
+        .eq('telegram_chat_identifier', chatId)
+        .single();
+
+    if (existingConversation && existingConversation.metadata) {
+      await this.chatStorage.supabase
+          .from('conversations')
+          .update({
+            metadata: {
+              ...existingConversation.metadata,
+              companyId,
+              officeId
+            }
+          })
+          .eq('id', existingConversation.id);
+    } else {
+      const conversation: Conversation = {
+        id: crypto.randomUUID(),
+        type: 'direct',
+        name: await this.getClientName(chatId),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        unreadCount: 0,
+        isArchived: false,
+        isMuted: false,
+        settings: {
+          retentionDays: 365,
+          autoBackup: true,
+          encryptionEnabled: false,
+          allowFileSharing: true,
+          maxFileSize: 50 * 1024 * 1024,
+          allowedFileTypes: ['image/*', 'application/pdf', 'text/*'],
+          supportedDocumentTypes: ['pdf', 'doc', 'docx', 'txt']
+        },
+        telegramChatIdentifier: chatId,
+        metadata: { companyId, officeId, regionId }
+      };
+      await this.chatStorage.storeConversation(conversation);
+    }
+
+    await this.sendMessage(chatId, `✅ You selected office: ${office.name} (${office.address})\n\nYou can now communicate with the associated company.`);
+  } catch (error) {
+    console.error('❌ Failed to select office:', error);
+    await this.sendMessage(chatId, 'Failed to select office. Please try again.');
   }
+}
+
 
   async sendMessage(chatId: string, text: string, options: any = {}): Promise<boolean> {
 
