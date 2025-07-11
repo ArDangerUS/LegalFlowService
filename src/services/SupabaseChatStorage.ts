@@ -96,7 +96,6 @@ export class SupabaseChatStorage {
    */
   async getOrCreateConversationUUID(
     telegramChatIdentifier: string,
-    senderName: string,
     recipientName: string
   ): Promise<string> {
     if (!supabase) {
@@ -128,10 +127,11 @@ export class SupabaseChatStorage {
 
       // Create new conversation with UUID
       const newUuid = crypto.randomUUID();
+
       const conversation: Conversation = {
         id: newUuid,
         type: 'direct',
-        name: telegramChatIdentifier === 'system' ? 'System Messages' : `${senderName} & ${recipientName}`,
+        name: telegramChatIdentifier === 'system' ? 'System Messages' : recipientName,
         createdAt: new Date(),
         updatedAt: new Date(),
         unreadCount: 0,

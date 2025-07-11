@@ -476,6 +476,24 @@ export class TelegramBotService {
     }
   }
 
+  private async getClientName(chatId: string): Promise<string> {
+    // Get client name for the chat
+    let clientName = chatId;
+    // Try to get user info from Telegram API if possible
+    try {
+      const chatInfo = await this.makeAPIRequest('getChat', { chat_id: chatId });
+      if (chatInfo && chatInfo.result) {
+        clientName = chatInfo.result.first_name || chatInfo.result.username || chatId;
+        if (chatInfo.result.username) {
+          clientName += ` (@${chatInfo.result.username})`;
+        }
+      }
+    } catch (e) {
+      // fallback to chatId
+    }
+    return clientName;
+  }
+
   private async handleRegionSelection(chatId: string, regionId: string): Promise<void> {
     try {
       // Update conversation metadata
@@ -493,10 +511,11 @@ export class TelegramBotService {
             })
             .eq('id', existingConversation.id);
       } else {
+        
         const conversation: Conversation = {
           id: crypto.randomUUID(),
           type: 'direct',
-          name: `Chat ${chatId}`,
+          name: await this.getClientName(chatId),
           createdAt: new Date(),
           updatedAt: new Date(),
           unreadCount: 0,
@@ -583,12 +602,12 @@ export class TelegramBotService {
   private async handleIncomingTelegramMessage(telegramMessage: TelegramMessage, isEdit: boolean): Promise<void> {
     const chatId = telegramMessage.chat.id.toString();
     const telegramMessageId = telegramMessage.message_id;
-
-    // Determine sender name
-    let senderName = telegramMessage.from.first_name;
+    
+    let senderName = telegramMessage.from.first_name || 'User';
     if (telegramMessage.from.username) {
       senderName += ` (@${telegramMessage.from.username})`;
     }
+    
 
     // Determine chat name
     let chatName = '';
@@ -609,11 +628,11 @@ export class TelegramBotService {
     const { content, messageType, attachments } = this.processMessageContent(telegramMessage);
 
     try {
-      // Get or create conversation UUID
+      // Get or create conversation UUID - pass only senderName as recipientName
+      console.log('💬 Creating/getting conversation with name:', senderName);
       const conversationUuid = await this.chatStorage.getOrCreateConversationUUID(
           chatId,
-          senderName,
-          'Bot'
+          senderName
       );
 
       // Check if this message already exists in Supabase
@@ -757,9 +776,22 @@ export class TelegramBotService {
         throw new Error('No response from Telegram API');
       }
 
-      const updates: TelegramUpdate[] = (await response.json()).result;
+      const responseData = await response.json();
+      
+      // Check if response has the expected structure
+      if (!responseData || typeof responseData !== 'object') {
+        console.warn('⚠️ Invalid response format from Telegram API');
+        return;
+      }
+
+      const updates: TelegramUpdate[] = responseData.result || [];
 
       for (const update of updates) {
+        if (!update || typeof update !== 'object') {
+          console.warn('⚠️ Invalid update object:', update);
+          continue;
+        }
+
         if (update.message) {
           await this.handleIncomingTelegramMessage(update.message, false);
         }
@@ -1045,21 +1077,16 @@ export class TelegramBotService {
           .eq('telegram_chat_identifier', chatId)
           .single();
 
-      const regionId = conversation?.metadata?.regionId || 'f28b48e8-3bc7-4d7f-b6a1-ba7e81549256';
+      const regionId = conversation && conversation.metadata ? conversation.metadata.regionId : 'f28b48e8-3bc7-4d7f-b6a1-ba7e81549256';
 
       const offices = await this.loadOfficesByRegion(regionId);
       const office = offices.find(o => o.id === officeId);
 
-      if (!office) {
-        await this.sendMessage(chatId, 'Office not found. Please try again.');
+      if (!office || !office.companyId) {
+        await this.sendMessage(chatId, 'Office not found or no company associated. Please try again.');
         return;
       }
-
       const companyId = office.companyId;
-      if (!companyId) {
-        await this.sendMessage(chatId, 'No company associated with this office. Please contact support.');
-        return;
-      }
 
       this.userOfficeMap.set(userId, officeId);
       this.userCompanyMap.set(userId, companyId);
@@ -1070,7 +1097,7 @@ export class TelegramBotService {
           .eq('telegram_chat_identifier', chatId)
           .single();
 
-      if (existingConversation) {
+      if (existingConversation && existingConversation.metadata) {
         await this.chatStorage.supabase
             .from('conversations')
             .update({
@@ -1085,7 +1112,7 @@ export class TelegramBotService {
         const conversation: Conversation = {
           id: crypto.randomUUID(),
           type: 'direct',
-          name: `Chat ${chatId}`,
+          name: await this.getClientName(chatId),
           createdAt: new Date(),
           updatedAt: new Date(),
           unreadCount: 0,
@@ -1097,7 +1124,8 @@ export class TelegramBotService {
             encryptionEnabled: false,
             allowFileSharing: true,
             maxFileSize: 50 * 1024 * 1024,
-            allowedFileTypes: ['image/*', 'application/pdf', 'text/*']
+            allowedFileTypes: ['image/*', 'application/pdf', 'text/*'],
+            supportedDocumentTypes: ['pdf', 'doc', 'docx', 'txt']
           },
           telegramChatIdentifier: chatId,
           metadata: { companyId, officeId, regionId }
@@ -1170,12 +1198,6 @@ export class TelegramBotService {
         telegramMessage = response.result;
       }
 
-      // Create service message for sent message
-      const conversationUuid = await this.chatStorage.getOrCreateConversationUUID(
-          chatId,
-          'Bot',
-          'User'
-      );
 
       const serviceMessage: ServiceMessage = {
         id: crypto.randomUUID(),
@@ -1247,9 +1269,9 @@ export class TelegramBotService {
       // Store the message locally
       this.storeMessage(chatId, serviceMessage);
 
-      // Store in Supabase
-      await this.storeMessageInSupabase(serviceMessage, chatId);
 
+    // Store in Supabase
+    await this.storeMessageInSupabase(serviceMessage, chatId);
       // Update chat
       const chat = this.chats.get(chatId);
       if (chat) {
@@ -1363,10 +1385,10 @@ export class TelegramBotService {
 
   private async storeMessageInSupabase(message: ServiceMessage, telegramChatIdString: string, telegramMessageId?: number): Promise<void> {
     try {
+      
       const conversationUuid = await this.chatStorage.getOrCreateConversationUUID(
           telegramChatIdString,
-          message.senderName,
-          message.direction === 'outgoing' ? 'User' : 'Bot'
+          await this.getClientName(telegramChatIdString)
       );
 
       const chatMessage: ChatMessage = {

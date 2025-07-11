@@ -49,18 +49,18 @@ function App() {
   // const botToken = "7902383724:AAGosG9WLCEuBdXeZhKHP7Qj-P0gjkiWn30";
 
   // Handle new Telegram message notifications
-  const handleTelegramNotification = (notification: {
+  function handleTelegramNotification(notification: {
     id: string;
     title: string;
     message: string;
     timestamp: Date;
-  }) => {
+  }) {
     addNotification({
       title: notification.title,
       message: notification.message,
       type: 'info'
     });
-  };
+  }
 
   const handleRetryConnection = async () => {
     // Reset offline mode to allow retry
