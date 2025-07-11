@@ -57,20 +57,74 @@ export class LegalCaseService {
   }
 
   async deleteOffice(id: string): Promise<void> {
-    // Сначала отвязываем всех пользователей от офиса
-    await supabase
-      .from('users')
-      .update({ office_id: null })
-      .eq('office_id', id);
+  try {
+    console.log('🗑️ LegalCaseService: Deleting office', id);
 
-    // Затем удаляем офис
-    const { error } = await supabase
-      .from('offices')
-      .delete()
-      .eq('id', id);
+    // Определяем правильный URL для API
+    const apiBaseUrl = window.location.port === '5173' || window.location.port === '3001'
+      ? 'http://localhost:3000'
+      : '';
 
-    if (error) throw error;
-  }
+    // Получаем токен авторизации
+    const token = localStorage.getItem('auth_token');
+    if (!token) {
+      throw new Error('Authentication token not found. Please log in again.');
+    }
+
+    // Делаем DELETE запрос
+    const response = await fetch(`${apiBaseUrl}/api/offices/${id}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    console.log('📡 Delete response status:', response.status);
+
+    if (!response.ok) {
+      let errorMessage = `HTTP ${response.status}`;
+
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.message || errorData.error || errorMessage;
+        console.error('❌ Server error response:', errorData);
+      } catch (parseError) {
+        console.error('❌ Could not parse error response');
+      }
+
+      throw new Error(errorMessage);
+    }
+
+    // Проверяем успешный ответ
+    try {
+      const result = await response.json();
+      console.log('✅ Office deleted successfully:', result);
+    } catch (parseError) {
+      // Если ответ пустой (204 No Content), это тоже успех
+      console.log('✅ Office deleted successfully (empty response)');
+    }
+
+  } catch (error) {
+    console.error('❌ Error deleting office:', error);
+
+    // Улучшаем сообщение об ошибке для пользователя
+    if (error instanceof Error) {
+      if (error.message.includes('fetch')) {
+        throw new Error('Не удается подключиться к серверу. Проверьте, что сервер запущен.');
+      } else if (error.message.includes('401')) {
+        throw new Error('Нет прав доступа. Войдите в систему заново.');
+      } else if (error.message.includes('403')) {
+        throw new Error('Недостаточно прав для удаления офиса.');
+      } else if (error.message.includes('404')) {
+        throw new Error('Офис не найден.');
+      } else {
+        throw new Error(`Ошибка удаления офиса: ${error.message}`);
+      }
+    }
+
+    throw new Error('Неизвестная ошибка при удалении офиса');
+  }}
 
   async getOfficeUsers(officeId: string): Promise<User[]> {
     const { data, error } = await supabase
@@ -264,6 +318,7 @@ export class LegalCaseService {
       .insert({
         name: officeData.name,
         address: officeData.address,
+        city: officeData.city,
         phone: officeData.phone,
         email: officeData.email
       })
@@ -796,6 +851,7 @@ export class LegalCaseService {
       id: row.id,
       name: row.name,
       address: row.address,
+      city: row.city,
       phone: row.phone,
       email: row.email,
       createdAt: new Date(row.created_at)
