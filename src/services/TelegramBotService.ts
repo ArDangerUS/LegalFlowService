@@ -620,7 +620,7 @@ export class TelegramBotService {
 
     // Handle /start command
     if (telegramMessage.text?.startsWith('/start')) {
-      await this.sendMessage(chatId, 'Welcome to LegalFlow! Please select a region to continue.');
+      await this.sendMessage(chatId, 'Добро пожаловать в LegalFlow! Пожалуйста, выберите регион для продолжения.');
       await this.showRegionsMenu(chatId);
       return;
     }
@@ -993,7 +993,7 @@ export class TelegramBotService {
     try {
       const regions = Array.from(this.regions.values());
       if (regions.length === 0) {
-        await this.sendMessage(chatId, 'No regions available. Please contact support.');
+        await this.sendMessage(chatId, 'Регионы недоступны. Пожалуйста, обратитесь в службу поддержки');
         return;
       }
 
@@ -1003,12 +1003,12 @@ export class TelegramBotService {
 
       await this.makeAPIRequest('sendMessage', {
         chat_id: parseInt(chatId),
-        text: 'Please select a region:',
+        text: 'Пожалуйста, выберите регион:',
         reply_markup: { inline_keyboard: inlineKeyboard }
       }, 5000);
     } catch (error) {
       console.error('❌ Failed to show regions menu:', error);
-      await this.sendMessage(chatId, 'Failed to show regions. Please try again.');
+      await this.sendMessage(chatId, 'Не удалось показать регионы. Попробуйте еще раз.');
     }
   }
 
@@ -1035,116 +1035,121 @@ export class TelegramBotService {
     }
   }
 
-  private async loadOfficesByRegion(regionId: string): Promise<Office[]> {
-    try {
-      const { data: companies, error: companyError } = await this.chatStorage.supabase
-          .from('companies')
-          .select('id, office_id')
-          .eq('region_id', regionId)
-          .eq('status', 'active');
+private async loadOfficesByRegion(regionId: string): Promise<Office[]> {
+  try {
+    console.log('🔍 Loading offices for region:', regionId);
 
-      if (companyError) throw companyError;
+    // Получаем название региона
+    const { data: region, error: regionError } = await this.chatStorage.supabase
+      .from('regions')
+      .select('name')
+      .eq('id', regionId)
+      .single();
 
-      if (!companies || companies.length === 0) {
-        return [];
-      }
-
-      const officeIds = companies.map(c => c.office_id).filter(id => id);
-      const { data: offices, error: officeError } = await this.chatStorage.supabase
-          .from('offices')
-          .select('id, name, address')
-          .in('id', officeIds)
-          .order('address', { ascending: true });
-
-      if (officeError) throw officeError;
-
-      const officesWithCompany = offices.map(office => ({
-        ...office,
-        companyId: companies.find(c => c.office_id === office.id)?.id
-      }));
-
-      return officesWithCompany;
-    } catch (error) {
-      console.error('❌ Failed to load offices for region:', error);
+    if (regionError || !region) {
+      console.error('❌ Region not found:', regionId);
       return [];
     }
-  }
 
- private async selectOffice(userId: string, chatId: string, officeId: string): Promise<void> {
-  try {
-    const { data: conversation } = await this.chatStorage.supabase
-        .from('conversations')
-        .select('metadata')
-        .eq('telegram_chat_identifier', chatId)
-        .single();
+    console.log('🌍 Region name:', region.name);
 
-    // ← ИСПРАВИТЬ ЛОГИКУ ПОЛУЧЕНИЯ regionId:
-    let regionId = 'f28b48e8-3bc7-4d7f-b6a1-ba7e81549256'; // fallback
+    // Ищем офисы по городу (напрямую, без компаний)
+    const { data: offices, error: officeError } = await this.chatStorage.supabase
+      .from('offices')
+      .select('id, name, address, city')
+      .ilike('city', region.name)
+      .order('name');
 
-    if (conversation && conversation.metadata && conversation.metadata.regionId) {
-      regionId = conversation.metadata.regionId;
+    if (officeError || !offices) {
+      console.error('❌ Error loading offices:', officeError);
+      return [];
     }
 
-    console.log('🔍 Using regionId:', regionId); // для отладки
+    console.log(`✅ Found ${offices.length} offices in ${region.name}`);
 
-    const offices = await this.loadOfficesByRegion(regionId);
-    const office = offices.find(o => o.id === officeId);
+    // Для каждого офиса находим компанию
+    const officesWithCompanies = [];
+    for (const office of offices) {
+      const { data: company } = await this.chatStorage.supabase
+        .from('companies')
+        .select('id')
+        .eq('office_id', office.id)
+        .eq('status', 'active')
+        .single();
 
-    if (!office || !office.companyId) {
-      await this.sendMessage(chatId, 'Office not found or no company associated. Please try again.');
+      if (company) {
+        officesWithCompanies.push({
+          ...office,
+          companyId: company.id
+        });
+      }
+    }
+
+    console.log(`✅ Found ${officesWithCompanies.length} offices with companies`);
+    return officesWithCompanies;
+
+  } catch (error) {
+    console.error('❌ Failed to load offices:', error);
+    return [];
+  }
+}
+
+private async selectOffice(userId: string, chatId: string, officeId: string): Promise<void> {
+  try {
+    // Проверяем офис
+    const { data: office, error: officeError } = await this.chatStorage.supabase
+      .from('offices')
+      .select('id, name, address, city')
+      .eq('id', officeId)
+      .single();
+
+    if (officeError || !office) {
+      await this.sendMessage(chatId, 'Офис не найден. Попробуйте еще раз.');
       return;
     }
-    const companyId = office.companyId;
 
-    this.userOfficeMap.set(userId, officeId);
-    this.userCompanyMap.set(userId, companyId);
+    // Находим компанию
+    const { data: company } = await this.chatStorage.supabase
+      .from('companies')
+      .select('id')
+      .eq('office_id', officeId)
+      .eq('status', 'active')
+      .single();
 
-    const { data: existingConversation } = await this.chatStorage.supabase
-        .from('conversations')
-        .select('id, metadata')
-        .eq('telegram_chat_identifier', chatId)
-        .single();
-
-    if (existingConversation && existingConversation.metadata) {
-      await this.chatStorage.supabase
-          .from('conversations')
-          .update({
-            metadata: {
-              ...existingConversation.metadata,
-              companyId,
-              officeId
-            }
-          })
-          .eq('id', existingConversation.id);
-    } else {
-      const conversation: Conversation = {
-        id: crypto.randomUUID(),
-        type: 'direct',
-        name: await this.getClientName(chatId),
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        unreadCount: 0,
-        isArchived: false,
-        isMuted: false,
-        settings: {
-          retentionDays: 365,
-          autoBackup: true,
-          encryptionEnabled: false,
-          allowFileSharing: true,
-          maxFileSize: 50 * 1024 * 1024,
-          allowedFileTypes: ['image/*', 'application/pdf', 'text/*'],
-          supportedDocumentTypes: ['pdf', 'doc', 'docx', 'txt']
-        },
-        telegramChatIdentifier: chatId,
-        metadata: { companyId, officeId, regionId }
-      };
-      await this.chatStorage.storeConversation(conversation);
+    if (!company) {
+      await this.sendMessage(chatId, 'Компания для этого офиса не найдена. Попробуйте выбрать другой офис.');
+      return;
     }
 
-    await this.sendMessage(chatId, `✅ You selected office: ${office.name} (${office.address})\n\nYou can now communicate with the associated company.`);
+    // Сохраняем выбор пользователя
+    this.userOfficeMap.set(userId, officeId);
+    this.userCompanyMap.set(userId, company.id);
+
+    // Обновляем метаданные разговора
+    const { data: conversation } = await this.chatStorage.supabase
+      .from('conversations')
+      .select('id, metadata')
+      .eq('telegram_chat_identifier', chatId)
+      .single();
+
+    if (conversation) {
+      await this.chatStorage.supabase
+        .from('conversations')
+        .update({
+          metadata: {
+            ...conversation.metadata,
+            companyId: company.id,
+            officeId: officeId
+          }
+        })
+        .eq('id', conversation.id);
+    }
+
+    await this.sendMessage(chatId, `✅ Вы выбрали офис: ${office.name} (${office.address})\n\nТеперь вы можете общаться с представителями компании.`);
+
   } catch (error) {
     console.error('❌ Failed to select office:', error);
-    await this.sendMessage(chatId, 'Failed to select office. Please try again.');
+    await this.sendMessage(chatId, 'Не удалось выбрать офис. Попробуйте еще раз.');
   }
 }
 
