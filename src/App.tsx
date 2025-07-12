@@ -44,8 +44,8 @@ function App() {
     markAsRead,
     clearAll
   } = useNotifications();
-
-  const botToken = "7242799466:AAEf-t8CSqzjOdVmVwWllns0ZVu7tvR_VD0";
+   const botToken = "8060826833:AAFc5QD-6RJPyIqiifydxKPDVfbuFZZq21Y"
+  // const botToken = "7242799466:AAEf-t8CSqzjOdVmVwWllns0ZVu7tvR_VD0";
   // const botToken = "7902383724:AAGosG9WLCEuBdXeZhKHP7Qj-P0gjkiWn30";
 
   // Handle new Telegram message notifications
